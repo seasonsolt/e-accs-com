@@ -1,0 +1,470 @@
+---
+title: AI Eval Harness：把 Prompt 从经验变成工程
+---
+
+# AI Eval Harness：把 Prompt 从经验变成工程
+
+> 来源：对 Prompt 工程、AI 编程和 Agent 架构讨论的补充整理。  
+> 核心问题：如果 Prompt 是任务说明书，那么 Harness 就是验证这份说明书是否稳定有效的测试台。
+
+## 一句话结论
+
+Prompt 决定模型“怎么做”，Harness 决定我们“如何知道它做得对不对”。
+
+没有 Harness，Prompt 调优很容易变成凭感觉改词；有了 Harness，Prompt、模型、工具和上下文策略才能进入工程迭代。
+
+可以这样理解：
+
+```text
+Prompt = 写给模型的任务规格说明
+Harness = 用来批量运行、记录、比较、评分的评测与回归测试框架
+```
+
+---
+
+## 1. 为什么需要 Harness？
+
+很多 AI 应用一开始都是这样调 Prompt：
+
+```text
+改一句 prompt
+  ↓
+手动跑几个例子
+  ↓
+感觉效果好一点
+  ↓
+上线
+```
+
+问题是，这种方式不可复现、不可比较，也很难防止退化。
+
+AI 输出还有几个特点：
+
+- 同一个输入可能有不同输出。
+- 模型升级后行为会漂移。
+- Prompt 小改动可能影响很多边界案例。
+- 工具调用、RAG、上下文压缩都会改变结果。
+- 人眼看几个样例，很难覆盖真实分布。
+
+所以需要 Harness，把 AI 能力变成可测试对象。
+
+---
+
+## 2. Harness 评测的不是模型本身，而是整个任务系统
+
+一个常见误区是把 eval harness 理解成“测模型智商”。
+
+在应用工程里，Harness 更应该评测完整链路：
+
+```text
+input dataset
+  ↓
+prompt / system prompt
+  ↓
+context construction / RAG / memory
+  ↓
+tool definitions / tool results
+  ↓
+model
+  ↓
+parser / schema validation
+  ↓
+scorer / evaluator
+  ↓
+report / regression comparison
+```
+
+所以它测的不是单独某个 LLM，而是：
+
+> 在当前 Prompt、上下文、工具、模型和解析逻辑组合下，这个任务系统是否稳定产出合格结果。
+
+---
+
+## 3. Harness 的基本组成
+
+一个最小可用的 Harness 通常包含 6 个部分。
+
+### 1. Evaluation Dataset
+
+也就是测试集。
+
+每条样例至少包含：
+
+```json
+{
+  "id": "case_001",
+  "input": "用户原始问题或文档片段",
+  "expected": "期望结果或判断标准",
+  "tags": ["normal", "edge_case"],
+  "notes": "为什么这个样例重要"
+}
+```
+
+样例来源最好是真实任务，而不是只靠人工编造。
+
+可以分为：
+
+- happy path
+- edge case
+- adversarial case
+- regression case
+- high-value business case
+- safety / compliance case
+
+---
+
+### 2. Runner
+
+Runner 负责批量执行任务。
+
+它要记录：
+
+- 使用的模型
+- prompt 版本
+- 输入样例
+- 输出结果
+- tool call trace
+- token / latency / cost
+- 错误信息
+- 时间戳
+
+也就是说，每次评测都应该可复现、可追踪。
+
+---
+
+### 3. Output Parser
+
+如果输出是结构化结果，必须先解析。
+
+例如 JSON 输出要验证：
+
+- 是否是合法 JSON
+- 是否符合 schema
+- 是否字段齐全
+- 字段类型是否正确
+- 是否包含非法值
+
+这一步很重要，因为很多 AI 结果看起来像 JSON，但其实不能被程序稳定消费。
+
+---
+
+### 4. Scorer
+
+Scorer 负责判断结果好坏。
+
+常见方式有三类：
+
+#### 精确匹配
+
+适合分类、选择题、固定字段：
+
+```text
+expected.status == actual.status
+```
+
+#### 规则评分
+
+适合工程任务：
+
+- JSON schema 是否通过
+- 是否引用了原文证据
+- 是否包含必填字段
+- 是否出现禁止内容
+- 数值是否在合理范围
+
+#### LLM-as-Judge
+
+适合开放式输出：
+
+- 摘要质量
+- 答案是否忠实原文
+- 建议是否可执行
+- 风险点是否完整
+
+但 LLM-as-Judge 不能只输出一个分数，最好输出结构化判断：
+
+```json
+{
+  "pass": true,
+  "score": 4,
+  "reason": "覆盖了主要事实，但遗漏了一个边界条件",
+  "missing_points": ["..."]
+}
+```
+
+---
+
+### 5. Report
+
+Report 不只是平均分。
+
+至少要能看：
+
+- 总体通过率
+- 各类标签通过率
+- 失败样例列表
+- 和上一个版本相比是提升还是退化
+- token / latency / cost 变化
+- 典型失败原因
+
+真正有价值的是 regression report：
+
+```text
+prompt_v12 相比 prompt_v11：
+- 总通过率：82% → 87%
+- edge case：70% → 76%
+- 成本：+8%
+- 新增退化样例：3 个
+```
+
+---
+
+### 6. Golden Cases
+
+Golden cases 是最重要的业务样例。
+
+这些样例不一定多，但必须稳定通过。
+
+例如法律/移民/文档解析类任务里，golden cases 可能包括：
+
+- 表格字段抽取
+- 证据日期识别
+- 用户身份信息合并
+- 文档类型判断
+- 不确定信息标记
+- 不得编造原文中不存在的事实
+
+Golden cases 的作用是防止 Prompt 或模型升级时破坏核心能力。
+
+---
+
+## 4. Harness 和 Prompt 工程的关系
+
+Prompt 工程不是孤立的。
+
+更完整的闭环应该是：
+
+```text
+设计 Prompt
+  ↓
+在 Harness 上跑 eval dataset
+  ↓
+查看失败样例
+  ↓
+分析失败模式
+  ↓
+修改 Prompt / schema / context / tool
+  ↓
+再次评测
+  ↓
+对比 regression report
+  ↓
+决定是否上线
+```
+
+所以 Prompt 调优不应该是“凭感觉改句子”，而应该是：
+
+> 根据失败样例和评测报告，定向修改任务说明、输出格式、上下文构造和评分标准。
+
+---
+
+## 5. Harness 特别适合哪些场景？
+
+### 1. Prompt 版本迭代
+
+每次改 Prompt，都跑一遍固定评测集，确认没有破坏旧能力。
+
+### 2. 模型切换
+
+例如从一个模型切到另一个模型，需要比较：
+
+- 准确率
+- 稳定性
+- 成本
+- 延迟
+- schema 遵守能力
+- 工具调用质量
+
+### 3. RAG 策略调整
+
+例如调整：
+
+- chunk size
+- top-k
+- reranker
+- query rewrite
+- metadata filter
+- citation 策略
+
+都应该通过 Harness 比较。
+
+### 4. Agent 工具调用
+
+Agent 不只是回答文本，还会调用工具。
+
+Harness 应该记录和评估：
+
+- 是否选择了正确工具
+- tool 参数是否正确
+- 是否重复调用
+- 是否漏掉必要工具
+- tool result 是否被正确使用
+- 最终回答是否忠实于 tool result
+
+### 5. 文档解析 / 信息抽取
+
+非常适合建立 golden dataset：
+
+- 输入文档
+- 期望 JSON
+- 字段级评分
+- 引用页码 / 原文证据
+- 不确定字段标记
+
+---
+
+## 6. 一个最小 Harness 结构
+
+```text
+evals/
+  cases/
+    prompt_cases.jsonl
+    document_cases.jsonl
+  prompts/
+    extract_profile_v1.md
+    extract_profile_v2.md
+  schemas/
+    profile.schema.json
+  run_eval.py
+  score.py
+  reports/
+    2026-05-23_prompt_v2.json
+```
+
+每条 case 可以长这样：
+
+```json
+{
+  "id": "doc_001",
+  "input_file": "fixtures/bank_statement_sample.pdf",
+  "task": "extract_financial_evidence",
+  "expected": {
+    "document_type": "bank_statement",
+    "account_holder_present": true,
+    "statement_period_present": true
+  },
+  "tags": ["document", "table", "golden"]
+}
+```
+
+一次评测输出：
+
+```json
+{
+  "run_id": "2026-05-23T12:00:00Z",
+  "prompt_version": "extract_profile_v2",
+  "model": "gpt-5.5",
+  "total": 120,
+  "passed": 103,
+  "failed": 17,
+  "pass_rate": 0.858,
+  "cost_usd": 3.42,
+  "latency_p50_ms": 1800,
+  "latency_p95_ms": 6200
+}
+```
+
+---
+
+## 7. 最重要的工程原则
+
+### 不要只评估最终自然语言
+
+优先让模型输出结构化中间结果，再评分。
+
+例如不要只看：
+
+```text
+这份文档看起来像银行流水。
+```
+
+而是要求：
+
+```json
+{
+  "document_type": "bank_statement",
+  "evidence": [
+    {
+      "field": "account_holder",
+      "value": "...",
+      "page": 1,
+      "quote": "..."
+    }
+  ],
+  "uncertain_fields": []
+}
+```
+
+这样 Harness 才能稳定评分。
+
+### 评估集要版本化
+
+Prompt、模型、case、schema 都要版本化。
+
+否则你无法知道性能变化来自哪里。
+
+### 失败样例比平均分更重要
+
+平均分只能告诉你“好像变好了”。
+
+失败样例会告诉你：
+
+- 哪类场景坏了
+- 为什么坏
+- 是否是业务不可接受的坏
+- 应该改 Prompt、检索、工具，还是 schema
+
+### 用 Harness 约束上线，而不是装饰报告
+
+如果 Harness 只是偶尔跑一次，它的价值有限。
+
+更好的方式是放进发布流程：
+
+```text
+改 Prompt / 改模型 / 改 RAG 参数
+  ↓
+自动跑 eval
+  ↓
+核心 golden cases 必须全过
+  ↓
+总体指标不能明显退化
+  ↓
+人工复核新增失败样例
+  ↓
+上线
+```
+
+---
+
+## 8. 最终总结
+
+Prompt 工程解决的是“如何把任务交代清楚”。
+
+Harness 解决的是“如何证明这个交代方式稳定有效”。
+
+如果没有 Harness，AI 应用很难从 demo 进入生产，因为你无法回答：
+
+- 改 Prompt 后有没有退化？
+- 换模型后哪个更好？
+- RAG 参数改了是否真的提升？
+- Agent 是否稳定调用正确工具？
+- 输出 JSON 是否能被下游系统稳定消费？
+- 核心业务样例是否仍然通过？
+
+所以，真正工程化的 AI 应用应该是：
+
+```text
+Prompt + Schema + Context Strategy + Tooling + Eval Harness
+```
+
+Prompt 是入口，Harness 是质量控制系统。
