@@ -1,0 +1,357 @@
+---
+title: LlamaIndex 的能力边界
+---
+
+# LlamaIndex 的能力边界
+
+> 来源：一次关于 LlamaIndex 是否能替代自研文档处理能力的调研讨论整理。  
+> 核心问题：LlamaIndex 为什么能脱颖而出？它适合替代哪些能力，不适合替代哪些能力？
+
+## 一句话结论
+
+LlamaIndex 能脱颖而出，不是因为它“什么都能做”，而是因为它很早、很坚定地押中了一个高价值方向：
+
+> 让 LLM 可靠地使用你的私有/业务数据。
+
+它最强的地方不是通用 Agent 编排，而是：
+
+```text
+把混乱的业务数据变成 LLM 可用、可检索、可组合、可评估的上下文系统。
+```
+
+---
+
+## 1. LlamaIndex 的核心定位
+
+LlamaIndex 最自然的定位是：
+
+> 面向上下文增强型 LLM 应用的数据层与检索层框架。
+
+它解决的问题不是“怎么调用模型”，而是：
+
+```text
+LLM 预训练时没有你的私有数据，
+如何把公司文档、PDF、数据库、SaaS、网页、邮件、表格、API 数据变成模型可用上下文？
+```
+
+典型链路是：
+
+```text
+原始数据
+  ↓
+Loader / Connector
+  ↓
+Document / Node
+  ↓
+Parsing / Chunking / Metadata
+  ↓
+Embedding / Index
+  ↓
+Vector Store / Graph / Structured Store
+  ↓
+Retriever
+  ↓
+Reranker / Postprocessor
+  ↓
+Query Engine / Chat Engine / Agent Tool
+  ↓
+LLM Response
+```
+
+---
+
+## 2. 它做对了什么？
+
+### 选对主战场
+
+企业 LLM 应用最早、最普遍、最有 ROI 的模式之一是 RAG。
+
+很多团队真正的问题不是：
+
+```text
+如何写一个 agent loop？
+```
+
+而是：
+
+```text
+如何让模型可靠地使用我的业务数据？
+```
+
+LlamaIndex 正好站在这个主航道上。
+
+### 抽象贴近 RAG 工程
+
+它没有只停留在 vector database wrapper，而是围绕 RAG 工程定义了一组有用概念：
+
+- Document
+- Node
+- Index
+- Retriever
+- Query Engine
+- Chat Engine
+- Response Synthesizer
+- Node Postprocessor
+- Reranker
+- Tools
+- Agents
+- Workflows
+
+这些概念贴近真实工程中的数据生命周期。
+
+### 上手简单，但有逃生通道
+
+简单路径：
+
+```python
+documents = SimpleDirectoryReader("data").load_data()
+index = VectorStoreIndex.from_documents(documents)
+query_engine = index.as_query_engine()
+response = query_engine.query("...")
+```
+
+复杂路径：
+
+- 自定义 parser
+- 自定义 node metadata
+- 自定义 retriever
+- 加 reranker
+- 做 query transform
+- 接 vector store
+- 做 evaluation
+- 编排 workflow
+
+优秀框架的一个特征是：
+
+> 上手简单，但逃生通道足够多。
+
+---
+
+## 3. 它特别擅长什么？
+
+### RAG / 知识库问答
+
+适合：
+
+- 企业知识库
+- 技术文档问答
+- 法律 / 政策 / 合规文档
+- 财报研报
+- 产品手册
+- 多 PDF 问答
+- 内部 Wiki / Notion / Google Drive / SharePoint 检索
+
+### 文档理解和结构化抽取
+
+结合 LlamaParse / LlamaExtract 后，它在复杂文档处理上有优势：
+
+- PDF 表格抽取
+- 合同字段抽取
+- 发票 / 账单 / 报告解析
+- 长文档分段理解
+- 多页、多表、多图文档
+
+### 多数据源检索和组合查询
+
+当数据来自：
+
+- PDF
+- SQL
+- API
+- 向量库
+- SaaS 系统
+- 本地文件
+
+并且希望自然语言 query 能路由到不同来源时，LlamaIndex 的抽象比较合适。
+
+### RAG 工程实验
+
+适合实验：
+
+- chunk size
+- embedding model
+- reranker
+- top-k
+- hybrid search
+- metadata filter
+- query transform
+- response synthesizer
+- faithfulness / relevance evaluation
+
+---
+
+## 4. 它不一定擅长什么？
+
+### 纯 Agent 复杂任务编排
+
+如果核心需求是：
+
+- 多 Agent 长期协作
+- 明确状态机
+- 图式流程控制
+- human approval node
+- durable execution
+- 强事务性 workflow
+- 大量外部工具和业务 API 操作
+
+那么 LangGraph、Temporal、Semantic Kernel、AutoGen、CrewAI，甚至自研状态机，可能更合适。
+
+LlamaIndex 有 Workflows，但它不是最纯粹的通用 Agent orchestration 框架。
+
+### 高度定制的生产级搜索系统
+
+如果需要：
+
+- 毫秒级搜索 SLA
+- 大规模多租户索引
+- 高级权限过滤
+- 搜索相关性调参
+- A/B test
+- ranking learning
+- 搜索运营后台
+
+LlamaIndex 不能替代完整搜索基础设施。
+
+它更像 RAG 应用层，底层仍可能需要 Elasticsearch、OpenSearch、Vespa、Qdrant、Milvus、Weaviate 等。
+
+### 非文本 / 非文档为主的应用
+
+如果核心是：
+
+- 图像生成
+- 视频理解
+- 实时语音 Agent
+- 游戏 Agent
+- 机器人控制
+- 浏览器自动化
+- 低延迟多模态对话
+
+LlamaIndex 不是最核心的框架。
+
+---
+
+## 5. LlamaParse 云服务、本地部署和 LiteParse 的区别
+
+这里要分清三种东西：
+
+```text
+1. LlamaCloud / LlamaParse 托管云服务
+   = 官方 SaaS，能力完整，开箱即用。
+
+2. LlamaCloud Self-hosted / BYOC
+   = 官方企业版自托管，部署在自己的 AWS / Azure / GCP Kubernetes。
+   产品能力目标是与托管云一致。
+
+3. 开源本地方案：LlamaIndex OSS + LiteParse / Tika / LibreOffice / Tesseract / 自研 pipeline
+   = 真正 local-first，但能力边界和官方 LlamaParse 不一样。
+```
+
+关键判断：
+
+> BYOC 在产品能力设计上不应该弱于官方云，但实际效果取决于模型可用性、版本、基础设施和配置。  
+> 纯本地 OSS 方案通常会弱于官方 LlamaParse 云服务，尤其在 OCR、复杂 PDF、表格、图表、扫描件、Word/Excel 语义保真上。
+
+---
+
+## 6. 对自研文档系统的替代策略
+
+不要把选择变成“全自研 vs 全替换”。更合理的是分层。
+
+```text
+低风险 / 低价值 / 简单文档
+  → 本地 LiteParse / Tika / PDFBox / LibreOffice
+
+复杂 PDF / 扫描件 / 表格 / 法律证据
+  → LlamaParse Cloud 或 BYOC
+
+高敏感客户 / 数据不能出域
+  → BYOC LlamaCloud
+
+UI 预览 / 缩略图 / PDF 高亮
+  → 保留自研 storage / preview 能力
+```
+
+可以抽象一个 `DocumentSemanticParser`：
+
+```text
+document-semantic-service
+  负责 parse + OCR + semantic artifact
+  可路由到:
+    - LlamaParse Cloud
+    - LlamaCloud BYOC
+    - LiteParse local
+    - legacy PDFBox / POI / docx4j fallback
+```
+
+而原有 storage 系统继续负责：
+
+- 文件存储
+- page image preview
+- thumbnail
+- temporal URL
+- PDF highlight
+- document lifecycle
+- parent-child page relationship
+- 业务 workflow
+
+---
+
+## 7. 推荐路由策略
+
+```text
+if document is simple text PDF:
+    use local parser
+
+if document is Word/Excel but not critical:
+    use LibreOffice conversion + local parse
+
+if document has scanned pages:
+    use LlamaParse agentic
+
+if document has tables/charts/financial statements:
+    use LlamaParse agentic_plus
+
+if document is sensitive and cannot leave cloud:
+    use BYOC LlamaCloud
+
+if parsing fails:
+    fallback to current storage preview pipeline
+```
+
+对于法律/移民/证据类文档，优先交给 LlamaParse / BYOC 的类型包括：
+
+- passport / BRP 扫描件
+- bank statement
+- payslip
+- utility bill
+- tenancy agreement
+- employment letter
+- Home Office letter
+- scanned PDF bundle
+- multi-page evidence pack
+- table-heavy Excel
+- 需要 citation / page evidence 的文档
+
+---
+
+## 最终判断
+
+LlamaIndex 最有价值的不是某个单点 API，而是它把 LLM 应用中的“上下文工程”系统化了。
+
+传统软件里有：
+
+- ORM 管数据库
+- Search engine 管搜索
+- ETL 管数据管道
+- BI 管分析
+- API framework 管服务
+
+LLM 应用里也需要一层：
+
+```text
+业务数据 → LLM 可用上下文
+```
+
+LlamaIndex 正在争夺这一层。
+
+所以它适合成为 RAG 和 document intelligence 的应用数据层，但不应该被误用成所有 Agent 编排、所有搜索系统、所有文档预览能力的替代品。

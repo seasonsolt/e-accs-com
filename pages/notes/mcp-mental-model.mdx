@@ -1,0 +1,211 @@
+---
+title: MCP 的正确心智模型
+---
+
+# MCP 的正确心智模型
+
+> 来源：一次关于 MCP 协议理解纠正的讨论整理。  
+> 核心问题：MCP 到底是“上下文注入协议”，还是更通用的工具协议？
+
+## 一句话理解
+
+MCP 不是简单的 RAG，也不是“让模型知道所有 API 怎么调”。
+
+更准确地说：
+
+> MCP 是一种让 AI 应用标准化发现、理解和调用外部上下文与工具的协议。
+
+它把外部系统封装成模型可发现、可调用的能力。
+
+---
+
+## 1. MCP 不只是注入知识
+
+MCP 全称是 Model Context Protocol。
+
+它连接的外部能力主要包括：
+
+- **Tools**：可调用动作，例如查数据库、读文件、创建 GitHub issue、调用内部 API。
+- **Resources**：可读取上下文，例如文件、文档、数据库记录、知识库条目。
+- **Prompts**：服务端预定义的提示模板或工作流入口。
+- **Sampling**：部分 MCP server 可以反过来请求模型完成子任务。
+
+所以，动态获取上下文只是 MCP 的一个应用场景。
+
+MCP 更大的价值是：
+
+```text
+让外部能力以统一协议暴露给模型应用。
+```
+
+---
+
+## 2. 外部能力不一定来自互联网 API
+
+MCP server 背后可以连接很多东西：
+
+- 本地文件系统
+- 本地 SQLite / Postgres 数据库
+- 企业内网服务
+- GitHub、Slack、Notion、Linear 等 SaaS
+- 本地 CLI 工具
+- 浏览器自动化
+- 私有知识库
+- 代码仓库
+- 本机进程或设备
+
+也就是说：
+
+```text
+大模型 ←→ MCP Client ←→ MCP Server ←→ 任意后端能力
+```
+
+这个后端能力可以是 HTTP API，也可以是本地命令、数据库、文件系统、RPC、SDK 或硬件设备。
+
+---
+
+## 3. MCP Server 负责封装底层接口
+
+调用外部系统时，接口定义、鉴权、错误处理、返回格式仍然需要有人实现。
+
+MCP 的价值是：
+
+> 这些适配逻辑集中封装在 MCP Server 中，而不是散落在每个 Agent / 每个应用里。
+
+例如 GitHub MCP server 可以把 GitHub API 封装成：
+
+- `list_issues`
+- `create_issue`
+- `get_pull_request`
+- `comment_on_pr`
+
+模型不需要知道 GitHub REST API 的 URL、headers、分页、返回 JSON 细节。
+
+MCP Server 负责：
+
+- 鉴权
+- API 调用
+- 参数校验
+- 返回结果整理
+- 错误处理
+- 暴露工具 schema
+
+模型看到的是更高层的工具定义。
+
+---
+
+## 4. 模型感知的是 MCP 暴露出来的 schema
+
+比较准确的流程是：
+
+```text
+MCP Client 连接 MCP Server
+  ↓
+Client 调用 list_tools() 等方法发现能力
+  ↓
+Server 返回工具列表、描述、参数 schema
+  ↓
+Agent / Client 把这些工具注册给模型
+  ↓
+模型根据任务决定是否调用工具
+```
+
+所以，不是模型直接扫描互联网接口，也不是模型自己理解所有 REST API。
+
+而是：
+
+```text
+MCP Server 把后端能力包装成标准工具描述；
+MCP Client 再把这些工具暴露给模型。
+```
+
+---
+
+## 5. MCP 常配合 tool-calling loop 使用
+
+典型流程是：
+
+```text
+用户问题
+  ↓
+Agent 把用户问题 + 可用 tools schema 发给模型
+  ↓
+模型决定调用某个 tool，并生成参数
+  ↓
+Agent / MCP Client 执行 tool call
+  ↓
+MCP Server 调用真实后端能力
+  ↓
+返回 tool result
+  ↓
+Agent 把 tool result 再发给模型
+  ↓
+模型基于结果继续推理或生成最终回答
+```
+
+这个过程不一定只有两轮。复杂任务可能是：
+
+```text
+模型 → tool A → 结果 → 模型 → tool B → 结果 → 模型 → tool C → 最终回答
+```
+
+所以更准确地说，它是多轮 tool-calling loop。
+
+---
+
+## 6. MCP 的核心价值是工具生态标准化
+
+没有 MCP 时，不同框架各自定义工具协议：
+
+```text
+LangChain tool 格式
+OpenAI function calling 格式
+Claude tool use 格式
+自研 Agent tool 格式
+某个 SaaS SDK 格式
+```
+
+每接一个外部系统，都可能要为不同框架写一遍适配层。
+
+MCP 试图标准化中间层：
+
+```text
+外部系统 ←→ MCP Server ←→ MCP Client / Agent / IDE / 模型应用
+```
+
+这样一个 MCP Server 可以被多个客户端使用：
+
+- Claude Desktop
+- Cursor
+- VS Code 插件
+- Hermes Agent
+- 自研 Agent
+- 企业内部 AI 助手
+
+类比一下：
+
+> MCP 对 Agent 工具生态的作用，有点像 LSP 对编辑器生态的作用。
+
+LSP 让不同编辑器用统一协议接语言服务；MCP 让不同 AI 应用用统一协议接外部工具和上下文。
+
+---
+
+## 7. 常见误区
+
+### 误区一：MCP 等于 RAG
+
+不对。MCP 可以用于上下文获取，但也可以用于执行动作、操作外部系统、读取资源、调用工作流。
+
+### 误区二：MCP 后面一定是互联网 API
+
+不对。MCP server 可以封装本地文件、本地数据库、CLI、内网服务、浏览器，甚至硬件设备。
+
+### 误区三：模型直接学会所有 API
+
+不对。模型看到的是 MCP server 暴露的工具 schema，而不是底层 API 的全部实现细节。
+
+---
+
+## 定稿版理解
+
+> MCP 是一种标准协议，用来让 AI 应用发现和调用外部工具、资源和上下文。外部系统的 API、数据库、本地文件或业务逻辑由 MCP Server 封装成标准化的 tools/resources，并暴露出名称、描述和参数 schema。MCP Client 连接这些 server 后，将可用工具注入到模型上下文中。模型根据用户任务决定是否调用某个工具，Agent 执行工具调用并把结果返回给模型，模型再基于结果继续推理或生成最终答案。

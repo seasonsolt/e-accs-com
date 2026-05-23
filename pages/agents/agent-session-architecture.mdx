@@ -1,0 +1,315 @@
+---
+title: Agent Session 和第三方消息平台
+---
+
+# Agent Session 和第三方消息平台
+
+> 来源：一次关于 OpenAI Agents SDK、Claude Agent SDK、Telegram / Discord Agent 产品架构的讨论整理。  
+> 核心问题：无状态 Chat API 里，Agent 如何恢复上下文？第三方消息平台的价值在哪里？
+
+## 一句话结论
+
+面向 Telegram、Discord、Slack 这类平台的 Agent 产品，最关键的架构分层是：
+
+```text
+第三方平台负责 Message Store 和用户入口；
+Agent 后端负责 Session Routing、Task State、Tool Runtime 和长期记忆。
+```
+
+这类产品的聪明之处，不是重新做一个聊天系统，而是把成熟通讯平台当作 Agent I/O 层。
+
+---
+
+## 1. Message 和 Session 是两层东西
+
+很多人容易把消息历史和 Agent session 混在一起。
+
+实际上它们应该分开理解：
+
+```text
+Message Store：
+用户实际看到的聊天消息。
+
+Agent Session：
+Agent runtime 用来继续推理、恢复上下文、记录工具调用的会话状态。
+```
+
+Telegram / Discord 已经提供：
+
+- 用户身份
+- chat_id / channel_id / thread_id
+- message_id
+- 消息历史
+- 图片 / 文件附件
+- 回复关系
+- 通知
+- 多端同步
+- 基础 UI
+- 群组 / 私聊
+
+Agent 系统自己不一定要一开始就实现完整 Chat 产品层。
+
+它可以集中做好：
+
+```text
+conversation key → agent session
+```
+
+---
+
+## 2. OpenAI Agents SDK：Session 更像应用数据库组件
+
+OpenAI Agents SDK 的 session 抽象更贴近 Web App。
+
+典型形式是：
+
+```python
+session = SQLAlchemySession.from_url(
+    session_id,
+    url=DATABASE_URL,
+    create_tables=True,
+)
+
+result = await Runner.run(
+    agent,
+    user_message,
+    session=session,
+)
+```
+
+它的心智模型是：
+
+```text
+每次请求：用同一个 session_id 打开同一个 session store。
+```
+
+SDK 会自动做两件事：
+
+```text
+Before run:
+从 session 里取出历史 items，拼到本次 input 前面。
+
+After run:
+把本次 user input、assistant output、tool call 等新增 items 写回 session。
+```
+
+所以对于无状态 HTTP Chat API：
+
+```text
+POST /chat
+POST /chat
+POST /chat
+```
+
+如果要延续上下文，每次请求都需要根据 `chat_id` 找到同一个 `openai_session_id`，重新构造 session 对象，再传给 `Runner.run(...)`。
+
+---
+
+## 3. Claude Agent SDK：Session 更像本地 runtime transcript
+
+Claude Agent SDK 的 `query()` 默认更像本地 Agent runtime。
+
+如果每次调用都是独立 request，默认会创建新 session。
+
+所以要继续旧会话，需要：
+
+```python
+options = ClaudeAgentOptions(
+    resume=claude_session_id,
+)
+
+async for message in query(
+    prompt=user_message,
+    options=options,
+):
+    ...
+```
+
+它的心智模型是：
+
+```text
+每次请求：告诉 Claude runtime 恢复某个已经存在的 session transcript。
+```
+
+第一次请求没有 session_id，不需要 resume；运行结束后从结果里捕获 session_id，保存映射。
+
+后续请求才使用：
+
+```text
+chat_id → claude_session_id → resume
+```
+
+注意：`continue_conversation=True` 更适合单用户、单目录、最近会话续接，不适合多用户 Chat / Bot。
+
+---
+
+## 4. Claude 和 OpenAI 的关键区别
+
+可以这样对比：
+
+```text
+Claude:
+每次 query 默认新 session；
+要继续旧会话，需要 ClaudeAgentOptions(resume=session_id)。
+
+OpenAI:
+每次 Runner.run 只要传同一个 session object / session_id backing store；
+SDK 会自动读取历史并写回。
+```
+
+更工程化地说：
+
+```text
+Claude 的恢复入口是 resume 参数。
+OpenAI 的恢复入口是 Session backend。
+```
+
+但二者共同点是：
+
+> 应用层都需要维护 `conversation_key → agent_session_id` 的映射。
+
+---
+
+## 5. 第三方消息平台 Agent 的架构优势
+
+基于 Telegram / Discord 的 Agent 产品很聪明，因为它复用了第三方平台的 Message Store。
+
+如果自己做 Chat Agent SaaS，需要从零实现：
+
+- 登录系统
+- 用户表
+- 会话列表
+- message 表
+- 文件上传
+- 消息渲染
+- 移动端通知
+- 多端同步
+- 群组 / thread
+- 权限
+- 搜索
+- 删除 / 导出
+- 反垃圾
+- 速率限制
+
+接入 Telegram / Discord 后，这些被平台承担了很大一部分。
+
+Agent 后端的核心路径变成：
+
+```text
+Platform Adapter
+  ↓
+Session Router
+  ↓
+Agent Runtime
+  ↓
+Reply Adapter
+```
+
+也就是：
+
+```text
+Telegram message
+  → resolve conversation key
+  → load/create agent session
+  → run agent
+  → send reply
+```
+
+---
+
+## 6. 推荐的数据表抽象
+
+一个最小 session mapping 可以是：
+
+```sql
+CREATE TABLE platform_sessions (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL,
+  platform_chat_id TEXT NOT NULL,
+  platform_thread_id TEXT,
+  agent_provider TEXT NOT NULL,
+  agent_session_id TEXT NOT NULL,
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP,
+
+  UNIQUE(platform, platform_chat_id, platform_thread_id, agent_provider)
+);
+```
+
+如果再加 run trace：
+
+```sql
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL,
+  platform_chat_id TEXT NOT NULL,
+  platform_message_id TEXT,
+  agent_session_id TEXT,
+  status TEXT,
+  final_output TEXT,
+  error_json TEXT,
+  created_at TIMESTAMP,
+  finished_at TIMESTAMP
+);
+```
+
+注意这里可以不存完整 message content，因为原始消息已经在平台上。
+
+但生产系统最好保存必要的派生状态：
+
+- session mapping
+- task summary
+- durable memory
+- tool artifacts
+- final outputs
+- important decisions
+- attachments metadata
+- run trace
+
+---
+
+## 7. 这个架构的边界
+
+### 平台消息历史不等于 Agent session transcript
+
+用户看到的消息和 Agent runtime 记录的 tool calls、tool results、内部推理上下文不是同一层。
+
+```text
+Platform message history ≠ Agent session transcript
+```
+
+### 平台历史不一定适合长期记忆
+
+Telegram / Discord 虽然保存消息，但不一定方便：
+
+- 高效检索
+- 完整拉取历史
+- 附件解析
+- 处理消息删除 / 编辑
+- 跨平台统一
+
+所以长期记忆最好还是自己做摘要、索引和状态管理。
+
+### conversation key 不能只用 chat_id
+
+不同平台模型不同：
+
+```text
+Telegram: chat_id + thread_id / topic_id
+Discord: guild_id + channel_id + thread_id
+Slack: team_id + channel_id + thread_ts
+```
+
+推荐抽象为：
+
+```text
+conversation_key = platform + workspace + channel + thread + user scope
+```
+
+---
+
+## 最终总结
+
+> OpenAI Agents SDK 的 session persistence 更接近应用开发框架，尤其是 SQLAlchemySession 这种设计，天然适合接入业务数据库；Claude Agent SDK 的 session 更像本地 Agent runtime 的 transcript/resume 机制，适合本地或 workspace 级任务，但做多用户 Chat SaaS 需要额外 session routing。  
+>  
+> 基于 Telegram / Discord 构建 Agent 的优势在于：第三方平台已经承担了 Chat UI、用户身份、消息持久化、通知和多端同步。Agent 后端可以只维护 conversation key 到 agent session 的映射，并专注于 Agent runtime、工具调用、任务状态和长期记忆。
