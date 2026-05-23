@@ -1,0 +1,582 @@
+---
+title: 怎样才算精通 Python？
+---
+
+# 怎样才算精通 Python？
+
+> 记录时间：2026-05-23  
+> 背景：我已经有 Java 和 C 的工程经验，所以这篇不是 Python 入门笔记，而是一次从 Java/C 迁移到 Python 的学习路线整理。
+
+## 一句话结论
+
+对资深 Java / C 工程师来说，精通 Python 不等于背熟语法，而是完成三件事：
+
+1. 理解 Python 的对象模型和名字绑定。
+2. 写出符合 Python 习惯的代码，而不是 Java/C 风格的 Python。
+3. 能把 Python 用在真实工程里：依赖、测试、类型、并发、部署、性能边界都清楚。
+
+我更愿意把“精通 Python”定义成：
+
+> 能用 Python 的语言模型、标准库和生态，写出简洁、可靠、可维护、可测试的工程代码。
+
+---
+
+## 1. 第一层：会写 Python 语法
+
+这是基础，但还不算精通。
+
+需要熟悉：
+
+- 基本类型：`int`、`float`、`str`、`list`、`tuple`、`dict`、`set`
+- 控制流：`if`、`for`、`while`、`match`
+- 函数：默认参数、关键字参数、`*args`、`**kwargs`
+- 类：属性、方法、继承、组合
+- 异常：`try` / `except` / `finally`
+- 模块和包：`import`、项目结构
+- 常用标准库：`pathlib`、`json`、`datetime`、`collections`、`itertools`、`functools`
+
+但这只是“能写 Python”。真正的分水岭在下一层。
+
+---
+
+## 2. 第二层：写得像 Python
+
+很多 Java/C 工程师刚写 Python 时，会写成这样：
+
+```python
+result = []
+for i in range(len(items)):
+    if items[i].valid:
+        result.append(items[i].value)
+```
+
+更 Pythonic 的写法是：
+
+```python
+result = [item.value for item in items if item.valid]
+```
+
+Pythonic 不是炫技，而是尊重 Python 的抽象：
+
+- 用迭代协议，而不是下标循环。
+- 用内置容器，而不是手写结构。
+- 用表达式和标准库，而不是重复造轮子。
+- 用上下文管理器管理资源。
+- 用 duck typing，而不是到处检查类型。
+
+例如文件读取，不推荐手动 close：
+
+```python
+f = open("data.txt")
+try:
+    data = f.read()
+finally:
+    f.close()
+```
+
+更自然的写法是：
+
+```python
+with open("data.txt") as f:
+    data = f.read()
+```
+
+这背后不是语法糖那么简单，而是 Python 的上下文管理协议：`__enter__` 和 `__exit__`。
+
+---
+
+## 3. 第三层：理解对象模型
+
+Python 里最重要的心智模型是：
+
+> 变量不是盒子，变量是名字；赋值不是复制对象，而是名字绑定。
+
+例如：
+
+```python
+a = [1, 2]
+b = a
+b.append(3)
+print(a)
+```
+
+输出：
+
+```python
+[1, 2, 3]
+```
+
+因为 `a` 和 `b` 绑定的是同一个 list 对象。
+
+另一个典型坑是可变默认参数：
+
+```python
+def add(x, items=[]):
+    items.append(x)
+    return items
+
+print(add(1))
+print(add(2))
+print(add(3))
+```
+
+输出不是三个独立列表，而是：
+
+```python
+[1]
+[1, 2]
+[1, 2, 3]
+```
+
+原因是默认参数在函数定义时求值，而不是每次调用时求值。
+
+正确写法：
+
+```python
+def add(x, items=None):
+    if items is None:
+        items = []
+    items.append(x)
+    return items
+```
+
+这类问题比语法更重要。因为它决定你是否真的理解 Python 的运行模型。
+
+---
+
+## 4. 第四层：理解协议，而不是只理解关键字
+
+Python 很多能力来自协议，而不是显式接口。
+
+### 迭代协议
+
+```python
+for x in obj:
+    ...
+```
+
+背后是：
+
+```python
+iter(obj)
+next(iterator)
+```
+
+对应方法：
+
+```python
+__iter__()
+__next__()
+```
+
+### 容器协议
+
+```python
+len(obj)
+obj[key]
+key in obj
+```
+
+背后可能是：
+
+```python
+__len__()
+__getitem__()
+__contains__()
+```
+
+### 上下文管理协议
+
+```python
+with resource:
+    ...
+```
+
+背后是：
+
+```python
+__enter__()
+__exit__()
+```
+
+### 可调用对象协议
+
+```python
+obj()
+```
+
+背后是：
+
+```python
+__call__()
+```
+
+### 属性访问和描述符
+
+```python
+obj.attr
+```
+
+可能触发：
+
+```python
+__get__()
+__set__()
+__delete__()
+```
+
+理解 descriptor，是理解 `property`、ORM、Pydantic、Django、SQLAlchemy 的关键。
+
+---
+
+## 5. 第五层：能写工程级 Python
+
+真正的精通一定要落到工程。
+
+我希望自己能熟练处理：
+
+- 项目结构
+- 虚拟环境
+- 依赖管理
+- 类型标注
+- 单元测试
+- 日志
+- 配置
+- 异常设计
+- 并发模型
+- 性能优化
+- 打包发布
+- CI/CD
+
+现代 Python 工程里，我会重点掌握这些工具：
+
+- `uv`：项目和依赖管理
+- `pyproject.toml`：项目配置
+- `pytest`：测试
+- `ruff`：格式化和 lint
+- `mypy` / `pyright`：类型检查
+- `logging`：日志
+- `typer` / `argparse`：CLI
+- `pydantic`：数据校验
+- `FastAPI`：API 服务
+- `SQLAlchemy`：数据库访问
+- `httpx`：HTTP 客户端
+- `asyncio`：异步 I/O
+
+---
+
+## Java/C 工程师最需要迁移的几个点
+
+### 1. Python 变量不是 C 变量
+
+C 里：
+
+```c
+int x = 1;
+```
+
+`x` 更像一块具体内存。
+
+Python 里：
+
+```python
+x = 1
+x = "hello"
+x = [1, 2, 3]
+```
+
+不是变量类型变了，而是名字 `x` 重新绑定到了不同对象。
+
+### 2. Python 是动态类型，但不是弱类型
+
+```python
+"1" + 2
+```
+
+这会报错。Python 不会偷偷把整数转成字符串。
+
+所以 Python 是：
+
+- 动态类型
+- 强类型
+- 运行时检查
+- 可以通过 type hints 增加静态约束
+
+### 3. Python 的接口更像协议
+
+Java 会写：
+
+```java
+interface Reader {
+    String read();
+}
+```
+
+Python 通常直接写：
+
+```python
+def process(reader):
+    data = reader.read()
+```
+
+只要对象有 `read()` 方法就可以。
+
+如果需要类型表达，可以用 `Protocol`：
+
+```python
+from typing import Protocol
+
+class Reader(Protocol):
+    def read(self) -> str:
+        ...
+
+def process(reader: Reader) -> None:
+    data = reader.read()
+```
+
+这比 Java 的 nominal interface 更接近结构化类型。
+
+### 4. 不要用 Java 风格过度设计
+
+Java 工程师容易一上来设计：
+
+- interface
+- abstract class
+- factory
+- manager
+- service
+- handler
+- impl
+
+Python 里很多时候一个函数就够了：
+
+```python
+def load_config(path: Path) -> Config:
+    ...
+```
+
+不要为了“像工程”而制造类层级。
+
+### 5. 性能优化方式不同
+
+C 工程师容易从循环、分支、内存布局开始优化。
+
+但 Python 的高性能路径通常是：
+
+- 用内置函数
+- 用标准库
+- 用 NumPy / Polars / Pandas
+- 用 C/Rust 扩展
+- 用 multiprocessing
+- 用 Numba / Cython
+- 避免 Python 层大循环
+
+例如：
+
+```python
+total = 0
+for x in nums:
+    total += x
+```
+
+通常不如：
+
+```python
+total = sum(nums)
+```
+
+如果是数值计算，更应该交给 NumPy。
+
+---
+
+## 我给自己的快速路线
+
+### 第 1 周：语言迁移
+
+目标：写出自然的 Python。
+
+重点：
+
+- 容器和推导式
+- 函数参数模型
+- unpacking
+- 类和异常
+- 迭代器
+- 生成器
+- 装饰器
+- `with` 和 context manager
+
+练习：写一个 CLI 小工具，例如文件扫描器或日志分析器。
+
+必须配套：
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format .
+```
+
+### 第 2 周：工程能力
+
+目标：能写可靠项目。
+
+重点：
+
+- `pyproject.toml`
+- 项目结构
+- `pytest`
+- type hints
+- `dataclass`
+- `pydantic`
+- `logging`
+- FastAPI
+- SQLAlchemy
+
+练习：写一个完整 CRUD API，带测试和类型检查。
+
+### 第 3 周：并发和数据处理
+
+目标：掌握 Python 实战场景。
+
+重点：
+
+- `asyncio`
+- `httpx`
+- `concurrent.futures`
+- `multiprocessing`
+- JSONL
+- SQLite
+- retry / timeout / rate limit
+
+练习：写一个异步抓取和处理管道。
+
+### 第 4 周：高级机制
+
+目标：理解 Python 的底层设计。
+
+重点：
+
+- Python data model
+- descriptor
+- metaclass 基本原理
+- import system
+- packaging
+- GIL
+- 性能边界
+- C/Rust 扩展思路
+
+练习：读一个库源码，例如：
+
+- `click`
+- `requests`
+- `pytest`
+- `pydantic`
+- `fastapi`
+- `sqlalchemy`
+
+---
+
+## 最重要的 20 个知识点
+
+如果压缩成最短路径，我认为应该重点学这 20 个：
+
+1. 名字绑定，不是变量盒子
+2. 可变对象与不可变对象
+3. `is` vs `==`
+4. list/dict/set comprehension
+5. unpacking
+6. `*args` / `**kwargs`
+7. 函数是一等对象
+8. 闭包
+9. 装饰器
+10. 生成器和 `yield`
+11. 迭代协议
+12. context manager
+13. dataclass
+14. type hints
+15. Protocol / duck typing
+16. magic methods
+17. descriptor
+18. asyncio
+19. GIL
+20. packaging / `pyproject.toml`
+
+---
+
+## 三个实战项目
+
+### 1. CLI 工具
+
+做一个代码行数统计或目录扫描工具。
+
+涉及：
+
+- `pathlib`
+- `argparse` / `typer`
+- `json`
+- `dataclasses`
+- `logging`
+- `pytest`
+
+### 2. HTTP API 服务
+
+做一个 FastAPI CRUD 服务。
+
+涉及：
+
+- FastAPI
+- Pydantic
+- SQLAlchemy
+- pytest
+- httpx
+- uvicorn
+
+### 3. 异步数据管道
+
+做一个异步 URL 抓取器。
+
+要求：
+
+- 并发请求
+- 限速
+- 重试
+- 超时
+- 解析结果
+- 输出 JSONL 或写入 SQLite
+
+涉及：
+
+- `asyncio`
+- `httpx`
+- `tenacity`
+- `BeautifulSoup`
+- `pydantic`
+- `sqlite3`
+- `rich`
+
+---
+
+## 最终判断标准
+
+我认为一个人精通 Python，不是因为他知道很多语法，而是因为他能解释并正确使用这些抽象：
+
+- `for` 背后的迭代协议
+- `with` 背后的 context manager
+- `@decorator` 背后的函数替换
+- `property` 背后的 descriptor
+- `dataclass`、Pydantic、普通 dict 各自的适用场景
+- 线程、进程、asyncio、C 扩展各自的性能边界
+
+最后落到工程上，就是能写出：
+
+- 可读
+- 可测
+- 可维护
+- 可部署
+- 类型清晰
+- 依赖干净
+- 性能边界明确
+
+的 Python 代码。
+
+这才是我理解的“精通 Python”。
