@@ -1,0 +1,554 @@
+---
+title: 鼎捷数智 AI Agent 平台架构岗面试准备
+---
+
+# 鼎捷数智 AI Agent 平台架构岗面试准备
+
+> 来源：一次围绕 BOSS 直聘 JD 的面试准备讨论整理。本文不复述原始聊天，而是沉淀一套可复用的岗位拆解和面试准备框架。
+
+## 一句话定位
+
+这个岗位表面是“资深后端架构（AI Coding 经验）”，但真实画像更接近：
+
+> 面向 ISV 生态的企业级 AI Agent 开发平台架构负责人。
+
+它不是普通 Java 后端，也不是单纯大模型应用开发。它要做的是一个支持第三方软件厂商（ISV）构建智能体、Skill、行业解决方案的平台。
+
+## JD 关键词拆解
+
+从岗位描述看，核心关键词包括：
+
+- AI Agent 开发平台
+- ISV 低代码 / 高代码构建智能体
+- Skill 标准化体系
+- Agent SDK、API 网关、调试工具链
+- 版本管理与发布流水线
+- GPT、文心、通义等大模型接入
+- 意图识别、技能选择、自然语言交互层
+- 上下文持久化与流转
+- ISV 资源隔离
+- Multi-Agent、Tool Learning、智能体编排
+
+这些词合在一起，指向的不是单个智能体，而是一个“平台型产品”：
+
+```text
+AI Agent Runtime
++ Skill Registry
++ 低代码 Agent Studio
++ 高代码 Agent SDK
++ 模型网关
++ 多租户 ISV 生态
++ 企业级治理与审计
+```
+
+## ISV 在这个岗位里的含义
+
+ISV 是 Independent Software Vendor，独立软件供应商。
+
+在这个 JD 里，ISV 更具体地指：
+
+> 基于鼎捷 AI Agent 开发平台，开发行业智能体、业务 Skill、插件和解决方案的第三方软件伙伴。
+
+例如：
+
+- 自动采购 Agent
+- 客服 Agent
+- 数据分析 Agent
+- ERP / MES / 供应链相关 Agent
+- 行业业务流程 Agent
+
+平台方提供底座，ISV 提供行业能力和业务扩展，最终共同服务企业客户。
+
+## 面试准备主线
+
+准备这类岗位，不应只背“微服务、高并发、大模型 API”。更有效的准备主线是：
+
+1. **业务理解**：鼎捷为什么需要 ISV Agent 平台。
+2. **平台架构**：如何设计低代码 + 高代码 AI Agent 开发平台。
+3. **技术深度**：Agent Runtime、Skill、上下文、模型网关、多租户、安全隔离。
+4. **经验映射**：把过往后端、平台、企业软件经验映射到岗位需求。
+5. **面试表达**：准备系统设计故事、STAR 项目故事和反问清单。
+
+## 参考平台架构
+
+可以按七层来讲：
+
+```text
+ISV / 开发者 / 企业客户
+        ↓
+开发者门户 / Agent Studio
+        ↓
+低代码编排层 + 高代码 SDK/API
+        ↓
+Agent Runtime
+        ↓
+Skill Registry / Tool Router
+        ↓
+Model Gateway / LLM Adapter
+        ↓
+ERP / MES / CRM / 数据库 / 第三方 API
+```
+
+更细拆：
+
+### 1. 接入层
+
+- API Gateway
+- OAuth / AKSK
+- 租户识别
+- 限流
+- 审计日志
+
+### 2. 开发者平台层
+
+- ISV 控制台
+- Agent Studio
+- Skill 管理
+- 调试预览
+- 版本发布
+- 文档和示例工程
+
+### 3. 低代码 / 高代码开发层
+
+- 低代码流程编排
+- Skill 拖拽式配置
+- 参数可视化配置
+- Agent SDK
+- CLI / Debugger
+- CI/CD
+
+### 4. Agent Runtime 层
+
+- Planner
+- Executor
+- Tool / Skill Router
+- Context Manager
+- Memory Manager
+- Human-in-the-loop
+- Event Bus
+
+### 5. Skill 平台层
+
+- Skill Registry
+- Skill Schema
+- 版本管理
+- 动态注册
+- 动态调度
+- 权限和风险等级
+
+### 6. 模型网关层
+
+- GPT / 文心 / 通义适配
+- 模型路由
+- fallback
+- token 统计
+- 成本归因
+- 日志和观测
+
+### 7. 基础设施层
+
+- 数据库
+- 向量库
+- 对象存储
+- 消息队列
+- Kubernetes
+- Prometheus / Grafana
+- 日志系统
+
+## 核心观点：低代码和高代码共享同一个 Runtime
+
+JD 同时提到低代码可视化开发引擎和高代码开发体系。面试时可以强调：
+
+> 低代码和高代码不应该是两套割裂系统，而应该共享同一个 Agent Runtime、Skill Registry 和发布治理体系。
+
+低代码画布最终生成 Graph DSL；高代码 SDK 也可以生成同样的 Graph DSL。平台运行时只识别统一 DSL。
+
+示例：
+
+```json
+{
+  "agent_id": "purchase_agent",
+  "version": "1.0.0",
+  "nodes": [
+    { "id": "intent", "type": "intent_classifier" },
+    { "id": "select_skill", "type": "skill_router" },
+    { "id": "approval", "type": "human_approval" },
+    { "id": "execute", "type": "skill_executor" }
+  ],
+  "edges": [
+    ["intent", "select_skill"],
+    ["select_skill", "approval"],
+    ["approval", "execute"]
+  ]
+}
+```
+
+这样可以同时支持可视化配置和工程化开发。
+
+## Skill 标准化体系怎么讲
+
+Skill 是这个平台的生态核心。一个 Skill 至少应该有这些元数据：
+
+```json
+{
+  "name": "create_purchase_order",
+  "description": "Create a purchase order in ERP system",
+  "input_schema": {},
+  "output_schema": {},
+  "version": "1.2.0",
+  "tenant_id": "isv_001",
+  "auth_type": "oauth2",
+  "risk_level": "medium",
+  "timeout_ms": 30000,
+  "retry_policy": {},
+  "rate_limit": {},
+  "visibility": "private/public/marketplace"
+}
+```
+
+Skill 生命周期：
+
+```text
+开发
+  ↓
+本地调试
+  ↓
+注册
+  ↓
+审核
+  ↓
+发布
+  ↓
+版本管理
+  ↓
+灰度
+  ↓
+运行观测
+  ↓
+下线
+```
+
+Skill 调度链路：
+
+```text
+用户意图
+  ↓
+意图识别
+  ↓
+候选 Skill 召回
+  ↓
+权限过滤
+  ↓
+租户过滤
+  ↓
+参数生成
+  ↓
+风险评估
+  ↓
+必要时 HITL
+  ↓
+执行
+  ↓
+结果回写上下文
+```
+
+如果被问到动态调度性能，可以从这些角度回答：
+
+- Skill metadata 建索引
+- 按租户、行业、场景分区
+- 用 embedding 检索候选 Skill
+- 用规则或模型 rerank
+- 热门 Skill 缓存
+- 参数 schema 编译缓存
+- 权限和租户过滤前置
+- 异步执行和超时控制
+
+## 模型网关怎么讲
+
+平台不应该在业务代码里散落调用 GPT、文心、通义，而应该有统一模型网关。
+
+模型网关负责：
+
+- 多模型统一 API
+- 模型适配器
+- 模型路由
+- fallback
+- 重试
+- 限流
+- token 统计
+- 成本归因
+- prompt 模板
+- 日志与审计
+- 内容安全
+- 缓存
+
+可以这样表达：
+
+> 所有模型调用经过模型网关，才能做成本控制、模型路由、fallback、审计、限流和租户级账单。
+
+## 上下文持久化怎么讲
+
+Agent 平台里的上下文不是简单 messages。可以分层：
+
+- **会话上下文**：当前用户对话历史。
+- **任务上下文**：当前 Agent 执行到哪一步、调用过哪些 Skill、结果是什么。
+- **业务上下文**：ERP / MES / CRM 中的订单、客户、库存、采购单等数据。
+- **长期记忆**：用户偏好、企业规则、历史决策。
+- **审计上下文**：模型输入输出、工具调用、审批记录。
+
+核心观点：
+
+> 上下文持久化不是把所有东西塞进 prompt，而是要有分层存储、检索、压缩和权限控制。
+
+## ISV 多租户和资源隔离
+
+这个 JD 明确提到 ISV 资源隔离。可以从这些方面讲：
+
+- 租户数据隔离
+- API Key / OAuth 隔离
+- 模型调用配额
+- Skill 执行沙箱
+- 网络访问控制
+- 日志和审计隔离
+- 计费归因
+- 故障隔离
+
+对于“百万级智能体实例”，可以补充一句：
+
+> 百万级 Agent 实例不应该理解为百万个常驻进程，而应该是百万个可恢复的 Agent session / workflow instance。运行时服务无状态，状态放在持久化存储里。
+
+这能体现平台架构意识。
+
+## Agent Native 和 Workflow 如何平衡
+
+这个岗位同时需要低代码编排和 Agent 自主决策。可以这样回答：
+
+> 我不会把 Agent 平台完全做成固定 DAG。固定 DAG 可控但不够智能；完全 Agent Native 自主性强但生产不可控。我的设计是：Graph 定义边界，Agent 在边界内自治，人类在高风险边界介入。
+
+例如：
+
+- 信息收集、候选 Skill 选择、参数生成，可以让 Agent 自主。
+- 发起采购、修改 ERP、发送客户消息、写入数据库，必须进入审批和审计流程。
+
+一句可复用表达：
+
+> Graph 定义边界，Agent 在边界内自治，人类在越界前介入。
+
+## 必练系统设计题
+
+### 题 1：设计一个面向 ISV 的 AI Agent 开发平台
+
+回答结构：
+
+1. 需求澄清
+2. 核心对象：ISV、Agent、Skill、Model、Tenant、Workflow
+3. 平台分层架构
+4. 低代码 / 高代码
+5. Skill Registry
+6. Agent Runtime
+7. 多租户隔离
+8. 模型网关
+9. 稳定性和观测
+10. 演进路线
+
+### 题 2：如何设计 Skill 标准化体系
+
+回答结构：
+
+1. Skill 定义
+2. Metadata 和 Schema
+3. 生命周期
+4. 动态注册和发现
+5. 权限和风险等级
+6. 版本兼容
+7. 调度性能
+8. Marketplace 治理
+
+### 题 3：如何设计低代码 Agent 编排引擎
+
+回答结构：
+
+1. 画布和节点模型
+2. Graph DSL
+3. 调试预览
+4. 发布版本
+5. 运行时解释 / 编译
+6. 错误处理
+7. Human-in-the-loop
+8. 与高代码 SDK 统一
+
+### 题 4：如何支持万级 ISV 和百万级 Agent 实例
+
+回答结构：
+
+1. 多租户模型
+2. 无状态 Runtime 服务
+3. 状态外置
+4. 队列削峰
+5. 分区和水平扩展
+6. 资源配额
+7. 降级和熔断
+8. 观测和告警
+
+### 题 5：如何做 ISV 资源隔离
+
+回答结构：
+
+1. 租户数据隔离
+2. API Key / OAuth 隔离
+3. 模型调用配额
+4. Skill 执行沙箱
+5. 网络访问控制
+6. 日志和审计隔离
+7. 计费归因
+8. 故障隔离
+
+## STAR 故事准备
+
+至少准备 5 个故事：
+
+1. 复杂平台架构设计
+2. API / SDK / 开放平台经验
+3. 高并发 / 稳定性 / 性能优化
+4. 团队技术领导、架构评审、Code Review
+5. AI / Agent / RAG / 工具调用探索
+
+每个故事按 STAR：
+
+```text
+Situation：业务背景
+Task：你负责什么
+Action：架构怎么设计，关键取舍是什么
+Result：性能、稳定性、交付、业务价值
+```
+
+## 面试反问清单
+
+建议准备这些问题：
+
+1. 这个 AI Agent 开发平台目前处于 0 到 1 阶段，还是已有平台需要架构升级？
+2. 目标 ISV 是鼎捷现有生态伙伴，还是未来会开放给更广泛的第三方开发者？
+3. 平台当前更偏低代码 Agent Studio，还是更偏高代码 SDK 和 API 开放平台？
+4. Skill 标准化体系目前是否已经有初版？包括 Schema、版本管理、发布审核和运行时调度这些是否已有规划？
+5. 大模型接入是直接接 GPT / 文心 / 通义，还是计划建设统一模型网关？
+6. 这个岗位入职 3 个月和 6 个月，最希望看到的成果是什么？
+
+这些问题能体现你已经在从平台落地角度思考。
+
+## 30 / 60 / 90 天入职规划
+
+### 前 30 天
+
+- 梳理现有平台架构和业务目标。
+- 明确 ISV 典型开发场景。
+- 盘点已有低代码、开放平台、大模型接入能力。
+- 输出 Agent Runtime、Skill Registry、模型网关的初版架构方案。
+- 定义平台 MVP 边界。
+
+### 前 60 天
+
+- 落地核心 POC。
+- 完成 Skill 注册、调度、版本管理原型。
+- 打通一个 Agent SDK 示例工程。
+- 打通一个低代码 Agent 流程编排 demo。
+- 接入至少两个模型供应商。
+- 完成上下文持久化和调试预览方案。
+
+### 前 90 天
+
+- 推出平台 MVP。
+- 支持 1-2 个 ISV 真实场景试点。
+- 建立技术规范、Code Review 机制和发布流水线。
+- 建立平台观测体系。
+- 输出下一阶段平台演进路线。
+
+## 面试中的核心表达
+
+### 1. 不要只讲“后端”
+
+要讲：
+
+```text
+平台后端、开发者平台、Agent Runtime、ISV 生态。
+```
+
+### 2. 不要只讲“模型”
+
+要讲：
+
+```text
+模型只是能力之一，平台关键是 Skill、Runtime、上下文、治理、调试和生态。
+```
+
+### 3. 不要只讲“低代码”
+
+要讲：
+
+```text
+低代码和高代码应该共用 Runtime 和 DSL。
+```
+
+### 4. 不要只讲“Agent 自主”
+
+要讲：
+
+```text
+Agent 自主性和企业级可控性要平衡。
+```
+
+### 5. 不要只讲“技术先进”
+
+要讲：
+
+```text
+ISV 怎么接入？怎么调试？怎么发布？怎么隔离？怎么计费？怎么审计？怎么支持？
+```
+
+## 系统设计回答模板
+
+如果面试官问：“你会怎么设计这个 AI Agent 开发平台？”
+
+可以这样回答：
+
+```text
+我会把平台分成五层。
+
+第一层是开发者入口，包括 ISV 控制台、低代码 Agent Studio、高代码 SDK、API 文档和示例工程。
+
+第二层是统一开发模型。低代码画布和高代码 SDK 最终都生成统一的 Agent Graph DSL，这样可以共用同一个运行时。
+
+第三层是 Agent Runtime，包括 Planner、Executor、Skill Router、Context Manager、Memory、Human-in-the-loop 和事件流。它负责智能体执行、状态流转、工具调用和失败恢复。
+
+第四层是 Skill 平台，包括 Skill Registry、Schema、版本管理、动态注册、权限、风险等级和运行时调度。ISV 的核心扩展点应该是 Skill。
+
+第五层是基础能力，包括模型网关、多租户资源隔离、任务队列、状态存储、向量库、对象存储、监控告警和审计。
+
+这样设计的好处是，低代码和高代码不会割裂，ISV 可以根据能力选择接入方式；模型也不会散落在业务代码里，而是通过模型网关统一治理；高风险动作可以通过 HITL 和审计保证企业级可控性。
+```
+
+## 最值得反复使用的观点
+
+- 这个岗位的核心不是做一个 Agent，而是做 Agent 开发平台。
+- Skill 是 ISV 生态的核心抽象。
+- 低代码和高代码应该共享统一 Runtime，而不是两套系统。
+- 模型网关是企业级 Agent 平台的基础设施。
+- Agent Native 和 Workflow 不冲突，Graph 定义边界，Agent 在边界内自治。
+- 百万级 Agent 实例不是百万个常驻进程，而是百万个可恢复的 Agent session / workflow instance。
+- Human-in-the-loop 不应该靠 prompt，而应该在工具和状态机层强制实现。
+
+## 最终定位
+
+面试中可以把自己定位为：
+
+> 一个能把传统企业软件平台架构升级到 AI Agent 开发平台的人。
+
+核心卖点：
+
+```text
+后端架构基本功
++ 企业软件理解
++ 平台工程思维
++ Agent Runtime 理解
++ ISV 开发者生态意识
++ 低代码 / 高代码统一抽象能力
+```
