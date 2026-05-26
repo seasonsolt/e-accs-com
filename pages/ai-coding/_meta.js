@@ -3,5 +3,5 @@ export default {
   'codex-workflow': 'Codex 工作流',
   'testing-with-ai': '用测试约束 AI',
   'ai-eval-harness': 'AI Eval Harness',
-  'llamaindex-rag-boundary': 'LlamaIndex 能力边界'
+  'llamaindex-rag-boundary': '深入理解 LlamaIndex'
 }
