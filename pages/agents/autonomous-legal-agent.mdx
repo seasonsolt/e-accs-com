@@ -1,0 +1,723 @@
+---
+title: 从 Workflow Bot 到可控法律 Agent
+---
+
+# 从 Workflow Bot 到可控法律 Agent
+
+> 来源：一次法律材料处理 Agent 架构重构的复盘。文中项目被泛化为 immigration legal agent，不包含真实客户、内部系统、密钥或业务敏感信息。
+
+## 一句话结论
+
+法律 Agent 不应该从“一上来就完全自主”开始。
+
+更稳妥的演进路径是：
+
+```text
+Command Bot
+  ↓
+Workflow Bot
+  ↓
+Human-in-the-loop Workflow
+  ↓
+可控 Autonomous Legal Agent
+```
+
+真正的工程难点不是让模型“多想几步”，而是把自主性关进一个可审计、可回滚、可中断、可人工接管的运行时里。
+
+对于法律材料处理这类高风险任务，Agent 架构的核心不是炫技，而是控制面：
+
+```text
+状态机决定边界
+工具层决定能力
+人工审批决定风险阈值
+审计日志决定可追责性
+评估集决定能否持续迭代
+```
+
+---
+
+## 1. 为什么法律场景不能直接做全自动 Agent
+
+法律材料处理看起来很适合 Agent：
+
+- 读取申请人材料
+- 识别缺失文件
+- 抽取事实和时间线
+- 生成问询清单
+- 草拟表格字段
+- 整理证据索引
+- 检查前后矛盾
+- 准备律师或 paralegal 审阅包
+
+但这类任务有几个天然约束：
+
+### 1.1 错误成本高
+
+普通客服 bot 答错一句话，通常可以重新解释。法律材料处理一旦把事实抽错、时间线排错、文件归类错，后续可能影响申请策略、审阅效率，甚至造成合规风险。
+
+所以系统必须默认：
+
+```text
+LLM output 是待验证草稿，不是事实本身。
+```
+
+### 1.2 任务边界含糊
+
+用户常常不会说：
+
+```text
+请执行第 3 个 workflow step。
+```
+
+他们会说：
+
+```text
+帮我看看这些材料还缺什么。
+```
+
+这句话可能包含多个子任务：文件识别、材料清单匹配、事实抽取、缺口判断、解释原因、生成下一步建议。Agent 需要能拆任务，但不能越权做法律结论。
+
+### 1.3 需要持续人工介入
+
+法律场景里，Human-in-the-loop 不是补丁，而是产品能力：
+
+- 低置信度抽取需要人工确认
+- 关键事实变更需要人工确认
+- 发给客户的正式内容需要人工确认
+- 涉及法律判断的输出需要专业人员确认
+- 工具执行失败需要人工修复或重试
+
+因此架构上必须把“暂停、等待、恢复、修改状态”设计成一等公民。
+
+---
+
+## 2. Command Bot：最早期的确定性入口
+
+很多法律 Agent 原型会从 command bot 开始。
+
+典型交互是：
+
+```text
+/extract_documents
+/check_missing_files
+/generate_questionnaire
+/summarize_case
+```
+
+它的优点很明显：
+
+- 行为可预测
+- 权限边界清楚
+- 容易测试
+- 用户知道自己触发了什么
+- 出错时容易定位是哪条命令失败
+
+但缺点也很明显：用户必须理解系统能力，并且把真实需求翻译成命令。
+
+Command Bot 的架构通常是：
+
+```text
+User Command
+  ↓
+Command Router
+  ↓
+Handler
+  ↓
+LLM / Parser / Database / File Tool
+  ↓
+Result
+```
+
+这适合早期验证工具能力，但很难承载复杂案件处理。因为真实工作不是一个命令，而是一串会分叉、会暂停、会返工的流程。
+
+### 工程教训
+
+Command Bot 阶段最值得保留的不是斜杠命令本身，而是清晰的工具边界。
+
+每个 command handler 最好沉淀成之后 Agent 可调用的 tool：
+
+```text
+extract_applicant_profile()
+classify_documents()
+find_missing_evidence()
+build_case_timeline()
+generate_review_packet()
+```
+
+也就是说，早期 command bot 可以是未来 Agent tool layer 的孵化器。
+
+---
+
+## 3. Workflow Bot：把任务变成可控流程
+
+当 command 越来越多，系统自然会进入 workflow bot 阶段。
+
+例如一个法律材料 intake workflow：
+
+```text
+1. 接收文件
+2. 病毒扫描和格式检查
+3. 文档分类
+4. OCR / parsing
+5. 事实抽取
+6. 与材料清单匹配
+7. 生成缺失项
+8. 人工审阅
+9. 生成客户补件请求
+```
+
+这个阶段的关键变化是：不再让模型自由决定下一步，而是由 workflow 决定流程骨架。
+
+```text
+Workflow owns control flow.
+LLM owns fuzzy cognition.
+```
+
+LLM 适合做：
+
+- 分类
+- 抽取
+- 总结
+- 匹配
+- 解释
+- 草拟文本
+
+Workflow 适合做：
+
+- 状态推进
+- 分支条件
+- 重试策略
+- 超时处理
+- 人工审批
+- 幂等执行
+- 审计记录
+
+这与 Anthropic 对 workflow 和 agent 的区分很接近：workflow 是预定义控制流，agent 是模型动态决定控制流。生产系统里不要急着把所有控制权交给模型。
+
+### 工程教训
+
+Workflow Bot 的价值是把“业务过程”显式化。
+
+不要把流程藏在 prompt 里：
+
+```text
+你是一个法律助理，请先检查材料，再抽取事实，再判断缺失项……
+```
+
+这种写法 demo 很快，但生产不可控。更好的方式是让代码保存流程状态：
+
+```text
+case_intake.status = "documents_classified"
+case_intake.pending_review = ["identity_document", "employment_letter"]
+case_intake.blocked_reason = "need_human_confirmation"
+```
+
+Prompt 只负责当前 step 的认知任务，不负责整个业务流程的生命周期。
+
+---
+
+## 4. Human-in-the-loop：不是弹窗，而是状态模型
+
+很多系统说自己支持 HITL，实际上只是“模型输出后给人看一眼”。这不够。
+
+OpenAI Agents SDK 和 LangGraph 相关实践都强调一个共同点：人工介入要能中断运行、保存状态、修改状态，然后从断点恢复。
+
+也就是说，HITL 不是 UI 功能，而是 runtime 能力。
+
+一个可用的 HITL 模型至少需要：
+
+```text
+Agent Run
+  ↓
+Checkpoint
+  ↓
+Interrupt: need_human_review
+  ↓
+Human Decision
+  ↓
+State Patch
+  ↓
+Resume
+```
+
+法律场景里，人工决策不只是 approve / reject，还可能是：
+
+- 修改抽取字段
+- 合并重复人员
+- 标记某个文件无效
+- 要求重新 OCR
+- 选择适用材料清单
+- 将某个结论降级为“待确认”
+- 补充外部事实
+- 改写发给客户的问题
+
+所以状态结构必须允许 patch，而不是只记录一段最终文本。
+
+### 推荐的 HITL 状态抽象
+
+```text
+run_id
+case_id
+current_step
+status: running | interrupted | approved | rejected | failed | completed
+interrupt_reason
+state_snapshot
+proposed_changes
+human_decision
+human_patch
+audit_events
+```
+
+人工介入后不要直接覆盖模型输出，最好记录差异：
+
+```text
+model_proposed_value
+human_final_value
+change_reason
+reviewer_id
+reviewed_at
+```
+
+这对法律场景尤其重要，因为系统需要知道哪些事实来自原始文件，哪些来自模型推断，哪些经过人工确认。
+
+---
+
+## 5. 从 Workflow 到 Agent：什么时候需要自主性
+
+不是所有流程都需要 autonomous agent。
+
+如果任务满足下面特征，workflow 通常更合适：
+
+- 步骤固定
+- 分支有限
+- 合规要求强
+- 输出格式稳定
+- 失败处理明确
+
+如果任务满足下面特征，才值得引入 Agent：
+
+- 用户目标不明确，需要澄清
+- 工具选择不固定
+- 需要跨多个资料源搜索
+- 需要根据中间结果动态改计划
+- 需要多轮分析和假设验证
+- 任务可能提前停止或改写目标
+
+法律材料处理里的典型 Agent 场景是：
+
+```text
+“帮我判断这批材料是否足够支持某类申请的初步审阅，列出最值得人工关注的问题。”
+```
+
+这个任务不是单一步骤。Agent 可能需要：
+
+1. 查看申请类型
+2. 读取材料清单
+3. 分类现有文件
+4. 抽取关键事实
+5. 查找冲突
+6. 识别缺口
+7. 生成问题列表
+8. 区分确定事实和推测
+9. 请求人工确认高风险项
+
+这里引入 Agent 的价值不是让它随便行动，而是让它在受控工具和受控状态里动态规划。
+
+---
+
+## 6. 可控 Autonomous Legal Agent 的推荐架构
+
+一个更稳的架构可以拆成五层：
+
+```text
+User / Reviewer UI
+  ↓
+Agent Control Plane
+  ↓
+Workflow / State Machine
+  ↓
+Tool Layer
+  ↓
+Data / Document / Audit Layer
+```
+
+### 6.1 Agent Control Plane
+
+控制面负责决定 Agent 能做什么、什么时候停、什么时候要人。
+
+包括：
+
+- run lifecycle
+- permission policy
+- step budget
+- tool budget
+- approval policy
+- risk threshold
+- retry policy
+- cancellation
+- trace and audit
+
+关键原则是：
+
+```text
+Agent 可以建议下一步，但控制面必须能拒绝、限制或暂停它。
+```
+
+### 6.2 Workflow / State Machine
+
+即使叫 autonomous agent，也不意味着没有 workflow。
+
+更合理的方式是：
+
+```text
+外层是 workflow，内层局部 agentic。
+```
+
+例如：
+
+```text
+Intake Workflow
+  ├─ Document Preparation: deterministic workflow
+  ├─ Fact Extraction: LLM task with schema
+  ├─ Gap Analysis: bounded agent
+  ├─ Human Review: interrupt and resume
+  └─ Client Request Draft: approval-required generation
+```
+
+这样既能保留动态推理能力，又不会让整个案件生命周期变成不可预测的 prompt loop。
+
+### 6.3 Tool Layer
+
+工具层要小而明确。不要给 Agent 一个“万能数据库工具”或“万能文件系统工具”。
+
+更好的 tool 设计是业务语义化：
+
+```text
+list_case_documents(case_id)
+get_document_text(document_id)
+extract_passport_fields(document_id)
+compare_against_checklist(case_id, checklist_id)
+create_missing_evidence_issue(case_id, evidence_type, reason)
+draft_client_question(case_id, issue_ids)
+request_human_review(run_id, review_items)
+```
+
+每个 tool 都应该有：
+
+- 输入 schema
+- 输出 schema
+- 权限检查
+- 幂等键
+- 错误类型
+- trace id
+- 是否需要审批
+- 是否会改变业务状态
+
+工具不是给模型玩的 API，而是生产系统的能力边界。
+
+### 6.4 Data / Document Layer
+
+法律 Agent 的数据层要区分几类信息：
+
+```text
+原始文件：用户上传的证据材料
+解析结果：OCR、文本、版面、表格
+抽取事实：姓名、日期、雇主、地址、身份信息
+模型判断：缺失项、冲突项、风险提示
+人工确认：reviewer 最终确认的字段和结论
+派生文档：问询清单、审阅包、草稿
+```
+
+不要把这些混在一个 “summary” 字段里。否则后续无法回答：
+
+```text
+这个结论来自哪份文件？
+是模型推断的，还是人工确认的？
+什么时候被修改过？
+为什么改？
+```
+
+### 6.5 Audit Layer
+
+法律场景必须有审计日志。
+
+至少记录：
+
+- 谁触发了 run
+- 使用了哪些文件版本
+- 调用了哪些工具
+- 每个工具的输入输出摘要
+- 哪些字段由模型生成
+- 哪些字段被人工修改
+- 哪些内容发给了客户
+- 哪些步骤失败或重试
+
+审计不是事后补一张 log 表，而是 Agent runtime 的基础设施。
+
+---
+
+## 7. 不要把状态藏在聊天记录里
+
+Agent 产品常见误区是把 chat history 当成状态源。
+
+聊天记录适合展示交互，但不适合承载业务状态。
+
+法律材料处理至少需要三套状态：
+
+```text
+Conversation State：用户说过什么
+Task State：当前任务执行到哪里
+Case State：案件事实、文件、缺口、审阅结论
+```
+
+它们不能混为一谈。
+
+如果只依赖聊天历史，会出现几个问题：
+
+- 恢复任务困难
+- 难以并发处理
+- 无法可靠重试
+- 无法精确更新某个字段
+- 审计粒度太粗
+- 后续评估无法复现
+
+更好的设计是：
+
+```text
+Chat message 是输入输出层。
+Structured state 是事实来源。
+Run trace 是执行证据。
+```
+
+Agent 每次回答用户时，可以引用结构化状态，但不能把结构化状态只保存在自然语言对话里。
+
+---
+
+## 8. Prompt 的边界：少写大而全，多写局部契约
+
+早期系统很容易把所有要求塞进一个 system prompt：
+
+```text
+你是一个专业法律助理。你需要理解案件、检查材料、发现缺失项、生成问题、保持谨慎……
+```
+
+这种 prompt 在 demo 中有效，但很难维护。
+
+更好的方式是把 prompt 拆成局部契约：
+
+```text
+Document classifier prompt
+Fact extraction prompt
+Gap analysis prompt
+Client question drafting prompt
+Reviewer summary prompt
+```
+
+每个 prompt 都绑定：
+
+- 明确输入
+- 明确输出 schema
+- 明确禁止事项
+- 明确置信度规则
+- 明确引用来源要求
+- 明确失败返回格式
+
+例如事实抽取不要返回散文，而应返回结构化结果：
+
+```json
+{
+  "field": "employment_start_date",
+  "value": "2022-04-01",
+  "source_document_id": "doc_123",
+  "source_quote": "Employment commenced on April 1, 2022",
+  "confidence": "high",
+  "needs_review": false
+}
+```
+
+在法律场景里，结构化输出不是为了好看，而是为了后续验证、审计和人工修改。
+
+---
+
+## 9. 评估：不要只看回答像不像人
+
+法律 Agent 的评估不能只看最终回答流畅度。
+
+更应该分层评估：
+
+### 9.1 工具级评估
+
+- 文档分类准确率
+- OCR 质量
+- 字段抽取准确率
+- 日期标准化准确率
+- checklist 匹配准确率
+
+### 9.2 流程级评估
+
+- 是否按正确顺序执行
+- 是否在高风险节点中断
+- 是否避免越权操作
+- 是否正确处理缺失输入
+- 是否可从 checkpoint 恢复
+
+### 9.3 输出级评估
+
+- 是否引用来源
+- 是否区分事实和推断
+- 是否标记不确定性
+- 是否生成可执行下一步
+- 是否避免给出未经审阅的法律结论
+
+### 9.4 人工审阅指标
+
+- 人工修改率
+- 高风险字段返工率
+- 缺失项误报率
+- 缺失项漏报率
+- 审阅节省时间
+- 客户补件问题清晰度
+
+如果没有这些评估，Agent 很容易在主观体验上“看起来更聪明”，但在生产上更不可控。
+
+---
+
+## 10. 常见反模式
+
+### 10.1 让 Agent 直接改最终业务数据
+
+不要让模型输出直接覆盖 case profile。
+
+更安全的模式是：
+
+```text
+Model Proposal → Validation → Human Review → Commit
+```
+
+### 10.2 用一个超级 Agent 处理所有任务
+
+超级 Agent 的问题是无法定位错误。
+
+更稳的方式是：
+
+```text
+多个小 agentic step + 明确 workflow glue
+```
+
+### 10.3 把法律判断和材料整理混在一起
+
+材料整理、事实抽取、格式检查可以较高程度自动化；法律判断、策略建议、正式对外文本需要更强审批。
+
+系统要区分：
+
+```text
+Administrative automation
+Evidence organization
+Legal reasoning assistance
+Formal legal advice
+```
+
+不同层级对应不同权限和 HITL 策略。
+
+### 10.4 没有版本概念
+
+法律材料会反复补充和替换。如果没有 document version、extraction version、review version，后续就无法解释为什么某次输出不同。
+
+### 10.5 只做 happy path
+
+真实系统里一定会遇到：
+
+- 文件损坏
+- 扫描件不清楚
+- 多语言材料
+- 重复文件
+- 信息冲突
+- 用户上传错材料
+- checklist 版本变化
+- 中途取消任务
+- 人工审阅超时
+
+这些都应该进入 workflow 和 eval，而不是等上线后靠人工救火。
+
+---
+
+## 11. 一个可落地的目标架构
+
+可以把最终系统理解成：
+
+```text
+                 ┌────────────────────┐
+                 │ User / Reviewer UI  │
+                 └─────────┬──────────┘
+                           ↓
+                 ┌────────────────────┐
+                 │  Agent Control     │
+                 │  Policy / Budget   │
+                 └─────────┬──────────┘
+                           ↓
+        ┌────────────────────────────────────┐
+        │ Workflow State Machine             │
+        │ checkpoints / interrupts / resume  │
+        └─────────┬──────────────────────────┘
+                  ↓
+        ┌────────────────────────────────────┐
+        │ Bounded Agentic Steps              │
+        │ plan / tool call / reflect         │
+        └─────────┬──────────────────────────┘
+                  ↓
+        ┌────────────────────────────────────┐
+        │ Business Tools                     │
+        │ document / extraction / checklist  │
+        └─────────┬──────────────────────────┘
+                  ↓
+        ┌────────────────────────────────────┐
+        │ Data Layer                         │
+        │ files / facts / issues / reviews   │
+        └─────────┬──────────────────────────┘
+                  ↓
+        ┌────────────────────────────────────┐
+        │ Audit / Eval / Observability       │
+        └────────────────────────────────────┘
+```
+
+这里的关键词是 bounded：Agent 可以自主，但必须在边界内自主。
+
+边界包括：
+
+- 只读还是可写
+- 可调用哪些工具
+- 最多执行多少步
+- 哪些字段必须引用来源
+- 哪些动作需要审批
+- 哪些置信度必须中断
+- 哪些输出只能作为草稿
+
+---
+
+## 12. 最终总结
+
+从 command bot 到 workflow bot，再到 autonomous legal agent，本质上不是“越来越智能”，而是“越来越会管理不确定性”。
+
+可以用三句话概括这次架构经验：
+
+```text
+Command Bot 解决入口问题。
+Workflow Bot 解决流程问题。
+Controlled Agent 解决不确定任务中的动态决策问题。
+```
+
+对于法律材料处理 Agent，最重要的工程原则是：
+
+```text
+不要把高风险业务交给一个黑盒 prompt loop。
+要用 workflow 固化边界，用 tool schema 限制能力，
+用 HITL 管理风险，用 audit 保留证据，用 eval 驱动迭代。
+```
+
+这也是 Anthropic workflow vs agent、OpenAI Agents SDK、LangGraph HITL 思路给生产系统的共同启发：
+
+```text
+自主性不是开关，而是一组可以被设计、度量和约束的系统能力。
+```
+
+法律 Agent 的目标不应该是替代专业人员做最终判断，而是把混乱材料变成结构化、可追溯、可审阅的工作状态，让专业人员更快、更稳地完成判断。
