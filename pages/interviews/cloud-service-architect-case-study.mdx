@@ -1,0 +1,530 @@
+---
+title: 云服务架构师面试课题：Legal AI SaaS 云平台生产架构
+---
+
+# 云服务架构师面试课题：Legal AI SaaS 云平台生产架构
+
+> 来源：基于 `cosxai/platform-environment` DevOps/GitOps 生产仓库整理的面试课题。本文将仓库里的 AKS、Kubernetes、ArgoCD、Kustomize、Key Vault、HPA、NetworkPolicy、Blue/Green 和真实 OOM 事故，沉淀为云服务架构师面试材料。
+
+## 目的
+
+本文档把 `platform-environment` 仓库沉淀为一个可复用的云服务架构师面试课题。它面向候选人评估：是否能基于真实 Kubernetes/GitOps 生产仓库，从安全、稳定、可扩展、高性能、发布治理、可观测性和成本控制等角度设计并治理云服务架构。
+
+本课题不是考察候选人是否会背 Kubernetes 概念，而是考察候选人能否在创业公司真实约束下做工程取舍：快速上线、生产稳定、企业安全、持续交付、成本可控、未来可扩展。
+
+## 背景设定
+
+我们是一家创业公司，正在建设面向企业客户的 Legal AI SaaS 平台。平台由多个微服务组成，运行在 Azure Kubernetes Service (AKS) 上，并通过 GitOps 管理生产环境。
+
+### 业务系统
+
+平台包含以下主要服务：
+
+- `core-gateway`：API Gateway，请求入口、路由、认证校验、限流。
+- `core-identity`：认证授权，OAuth2/JWT/RBAC。
+- `core-messaging`：消息和异步处理。
+- `core-intelligence`：AI 处理服务。
+- `core-storage`：文件上传、文件管理、PDF 处理。
+- `core-workspace`：工作区管理。
+- `core-knowledge`：知识库服务。
+- `xeni-case`：案件业务服务。
+- `xeni-dashboard`：用户前端。
+- `xeni-operation`：运营后台。
+- `infra-consul`：服务发现。
+- `infra-secrets`：基础设施 SecretProviderClass。
+
+### 技术栈
+
+当前平台使用：
+
+- Azure AKS
+- Kubernetes manifests
+- Kustomize base + overlays
+- ArgoCD GitOps
+- Azure Key Vault CSI Driver
+- Azure Workload Identity
+- NGINX Ingress
+- cert-manager
+- NetworkPolicy
+- HorizontalPodAutoscaler (HPA)
+- Prometheus ServiceMonitor
+- GitHub Releases / RC / production tag
+- 多环境：development、testing、staging、production
+- 多区域：AP、US、EU、CR-EU、SU-EU 等
+- 生产 blue/green 环境：例如 `eu-blue`、`eu-green`
+
+### 真实生产事故材料
+
+平台曾出现过一次生产稳定性事故：
+
+- `core-storage` 在处理大 PDF 文件时发生 `java.lang.OutOfMemoryError: Java heap space`。
+- 触发 workload：大于 10MB 的 PDF，包含 200+ embedded images。
+- `core-storage` Pod 反复重启。
+- `xeni-case` 依赖 `core-storage`，随后出现 `No servers available` 类故障。
+- 用户文件上传、PDF 处理、case file 操作失败约 30 分钟。
+- 后续通过提升 JVM heap、调整 Kubernetes resources、启用 HPA、同步多环境资源配置等方式缓解。
+
+这个事故应作为面试讨论的重要材料，用来判断候选人是否理解 JVM、Kubernetes resource、HPA、依赖隔离、故障级联和可观测性之间的关系。
+
+## 面试主问题
+
+请候选人回答：
+
+> 现在我们要把这个 Legal AI SaaS 平台建设成企业级生产系统。你作为云服务架构师，需要基于 AKS + Kubernetes + GitOps 设计一套生产可用架构。请从安全、稳定、可扩展、高性能、发布治理、可观测性和成本控制几个角度说明你的方案。
+
+候选人应该先给出整体架构，再按维度展开。优秀候选人会主动说明取舍，而不是只罗列技术名词。
+
+## 第一轮：整体架构设计
+
+### 问题
+
+请你画出并解释这个平台的生产架构。说明用户请求从浏览器/API Client 进入系统，到 Gateway、Identity、业务服务、AI 服务、文件存储、数据库、消息系统、监控系统的完整路径。
+
+### 重点考察
+
+- 是否能区分控制平面和数据平面。
+- 是否能说明 Ingress、Gateway、Identity、Backend Services、AI Provider、Storage、Messaging、Observability 的职责边界。
+- 是否理解 GitOps 仓库是生产状态的单一真实来源。
+- 是否能解释 dev、staging、production 的 promotion path。
+- 是否能说明 production 私有 AKS 的运维方式。
+
+### 参考答案要点
+
+候选人应该覆盖：
+
+1. 外部流量通过 DNS + TLS + NGINX Ingress 进入。
+2. Ingress 只暴露必要服务，核心入口是 `core-gateway`。
+3. `core-gateway` 负责路由、认证校验、限流、CORS 和统一入口治理。
+4. `core-identity` 负责 OAuth2/JWT/RBAC。
+5. 业务服务之间通过 Service/Consul 发现，内部调用受 NetworkPolicy 限制。
+6. Secrets 来自 Azure Key Vault，不进入 Git 仓库。
+7. 工作负载使用 ServiceAccount + Workload Identity 获取云资源权限。
+8. ArgoCD 从 `platform-environment` repo 拉取 desired state 并同步到 AKS。
+9. Kustomize base 存放通用 manifests，overlays 管理环境/区域差异。
+10. Prometheus ServiceMonitor、日志、Tracing、告警构成可观测性闭环。
+
+## 第二轮：安全架构
+
+### 问题
+
+企业客户要求较高的安全治理。请说明如何设计入口安全、身份权限、Secret 管理、网络隔离、供应链安全和审计。
+
+### 参考答案要点
+
+#### 入口安全
+
+- 所有外部流量必须经过 Ingress/Gateway。
+- 强制 TLS，使用 cert-manager 自动管理证书。
+- 对公开 API 设置 rate limit、connection limit、body size limit。
+- 上传接口和普通 API 的 body size、timeout、限流策略应分开设计。
+- Gateway 层统一处理认证校验、CORS、路由和防护策略。
+
+#### 身份与权限
+
+- 用户身份使用 OAuth2/JWT/RBAC。
+- 服务身份使用 Kubernetes ServiceAccount + Azure Workload Identity。
+- 不应该把云账号静态密钥放进 Pod。
+- 每个服务独立 ServiceAccount，遵循最小权限。
+- 管理操作需要审计，并尽量通过 GitOps/PR 流程完成。
+
+#### Secret 管理
+
+- Secret 明文不得进入 Git。
+- GitOps repo 只保存 SecretProviderClass、secret name、挂载关系等非敏感信息。
+- Azure Key Vault 是 Secret 源头。
+- Secret 应区分 environment/region/tenant。
+- 需要有轮换策略和回滚策略。
+
+#### 网络隔离
+
+- 默认拒绝，只开放必要 ingress/egress。
+- 对 Postgres、Redis、Consul、AI Gateway、外部 provider 分别定义最小访问范围。
+- NetworkPolicy 要通过集成测试验证，不能只靠 YAML review。
+- 真实案例：Redis cluster 模式下，除了统一端口，还可能需要开放 internal node ports，否则服务会在生产中连接失败。
+
+#### 供应链安全
+
+- 镜像构建阶段完成依赖安装，运行阶段不下载包。
+- 镜像推送到 ACR 后进行 vulnerability scan。
+- 生产环境只允许运行可信 registry 的镜像。
+- 关键镜像应考虑 SBOM、签名、admission policy。
+- 真实案例：前端镜像如果在 runtime 执行 `pnpm add`，DNS 或 npm registry 抖动会导致 Pod 启动失败。
+
+### 追问
+
+- 如果某个服务需要访问 Key Vault，如何避免所有服务共享高权限 identity？
+- GitOps 仓库里是否应该出现 Kubernetes Secret？为什么？
+- 如何设计 break-glass 权限？
+- NetworkPolicy 太严格导致生产不可用时，你如何快速定位？
+- 多租户隔离应该放在 namespace、database、schema 还是 application 层？
+
+## 第三轮：稳定性与高可用
+
+### 问题
+
+请基于 `core-storage` OOM 事故，说明你会如何定位、止血、根治，并如何防止再次发生。
+
+### 参考答案要点
+
+#### 定位
+
+- 查看 Pod restart count、events、previous logs。
+- 查看是否出现 `OutOfMemoryError`、OOMKilled、liveness probe failure。
+- 对比 JVM `-Xmx`、container memory request、container memory limit。
+- 查看 HPA 当前副本、CPU/memory utilization。
+- 查看依赖服务，例如 `xeni-case` 是否是级联故障。
+- 查看 workload 特征：文件大小、PDF 图片数量、并发上传数量。
+
+#### 止血
+
+- 临时提高 `core-storage` replicas 和资源限制。
+- 限制大文件上传或降低并发。
+- 如果有开关，暂时关闭高内存 PDF 压缩功能。
+- 对依赖方增加 timeout/retry backoff，避免级联重启。
+- 必要时回滚到已知稳定版本。
+
+#### 根治
+
+- 调整 JVM heap，使 `-Xmx` 与 container memory limit 匹配，通常 heap 不应占满容器内存，需要给 metaspace、thread stack、direct buffer、native memory 留空间。
+- 对大 PDF 处理使用 streaming，避免一次性读入内存。
+- 将文件处理拆为异步 worker，而不是同步 API 请求内完成。
+- 引入 circuit breaker、bulkhead、timeout、retry with backoff。
+- 对上传文件大小、页数、图片数量设置明确产品限制。
+- 建立压测数据集，覆盖大文件、并发上传、AI 处理场景。
+
+#### 防再次发生
+
+- 为关键服务建立 SLO，例如 upload success rate、p95/p99 latency、error rate。
+- 告警覆盖：pod restart、OOMKilled、memory utilization、GC pause、HPA saturation、queue lag。
+- 事故后更新 runbook 和 resource guide。
+- staging 应尽量复现 production workload，而不是只验证小流量。
+- 对依赖服务进行故障注入测试，例如 storage 不可用时 case 服务应降级而不是崩溃。
+
+### 追问
+
+- HPA 已经存在，为什么还是可能 OOM？
+- livenessProbe 配错为什么会放大事故？
+- readinessProbe 和 livenessProbe 的职责区别是什么？
+- 一个 Java 服务设置 2Gi request / 4Gi limit 是否合理？如何验证？
+- 下游不可用时，上游服务应该 retry 还是 fail fast？
+
+## 第四轮：可扩展性
+
+### 问题
+
+如果 6 个月后服务数量从 10 个增长到 100 个，客户数从 10 个增长到 1000 个，文件处理量增长 50 倍，你如何扩展平台？
+
+### 参考答案要点
+
+#### 服务扩展
+
+- 对普通 stateless API 使用 Deployment + HPA。
+- 对 CPU-bound 服务使用 CPU 指标扩容。
+- 对 memory-bound 服务谨慎使用 memory 指标，重点是容量规划和内存模型优化。
+- 对文件处理、AI 处理等异步任务使用 queue + worker。
+- 对 queue-based workload 使用 KEDA 或自定义指标，根据 queue depth/lag 扩容。
+
+#### GitOps 扩展
+
+- `apps/` 作为 base manifests。
+- `overlays/{environment}/{region}/{group}/{service}` 管理差异。
+- 用 ApplicationSet 自动发现服务和环境，避免每个服务手写 ArgoCD Application。
+- 服务分组：core、infra、xeni，便于 ArgoCD UI 和团队治理。
+- release 目录锁定一组服务版本，避免生产环境版本漂移。
+
+#### 区域扩展
+
+新增 region 应该自动化创建：
+
+1. AKS 访问配置。
+2. namespace。
+3. Workload Identity federated credentials。
+4. Key Vault SecretProviderClass。
+5. admin API keys。
+6. region overlay。
+7. ArgoCD parent app / ApplicationSet。
+8. smoke test 和 readiness 验证。
+
+#### 组织扩展
+
+- 每个服务有 owner。
+- 平台团队维护模板、规范、CI/CD、policy。
+- 应用团队维护服务代码和服务级配置。
+- 重大架构变更通过 ADR 记录。
+- 文档遵循 Single Source of Truth，避免重复复制。
+
+### 追问
+
+- 100 个服务时，如何避免 overlay 复制粘贴失控？
+- 哪些配置应该放在 base，哪些应该放在 overlay？
+- 新服务上线 checklist 应该包括什么？
+- 是否需要 service mesh？什么时候需要，什么时候不需要？
+- 多 region 是 active-active 还是 active-passive？如何选择？
+
+## 第五轮：高性能架构
+
+### 问题
+
+平台未来需要支持大量文件上传、AI 处理和企业客户 API 调用。请说明你如何优化性能和容量。
+
+### 参考答案要点
+
+#### API 性能
+
+- Gateway 做连接限制、请求限流、超时控制。
+- 区分普通 API、上传 API、长任务 API 的 timeout 和 body size。
+- 对 p95/p99 latency 建立 SLO。
+- 避免 Gateway 成为单点或瓶颈。
+
+#### Java 服务性能
+
+- JVM heap 与容器 limit 匹配。
+- 根据 workload 选择 GC 策略，例如 G1GC。
+- 控制 thread pool、HTTP connection pool、DB connection pool。
+- 避免 Pod 横向扩展后打爆数据库连接数。
+- 监控 GC pause、heap usage、native memory、thread count。
+
+#### 文件处理性能
+
+- 大文件上传使用 streaming。
+- 大 PDF 压缩、OCR、embedding、indexing 拆成 pipeline。
+- 使用对象存储保存原始文件和中间结果。
+- 大任务异步化，API 返回 task id。
+- 对文件大小、页数、图片数量设置产品级限制。
+
+#### AI 处理性能
+
+- AI 调用经过统一 gateway 或 service abstraction。
+- 支持 provider timeout、fallback、retry、budget、tenant quota。
+- 长耗时 AI 任务异步化。
+- 对 token 使用量、provider latency、error rate 做监控。
+- 对不同租户设置并发和成本配额。
+
+#### 压测与容量规划
+
+压测应覆盖：
+
+- 普通 API QPS。
+- 文件上传并发。
+- 大 PDF 处理。
+- AI 请求峰值。
+- 数据库连接池极限。
+- Redis cluster 连接。
+- HPA scale-up time。
+- Blue/Green 切换过程。
+
+关键指标包括：
+
+- p50/p95/p99 latency。
+- error rate。
+- CPU/memory utilization。
+- GC pause。
+- queue lag。
+- pod restart count。
+- HPA desired/current replicas。
+- DB connection saturation。
+- AI provider latency/cost。
+
+### 追问
+
+- p99 latency 升高但 CPU 不高，可能是什么原因？
+- 文件上传接口是否应该和普通 API 使用同样限流？
+- HPA scale-up 有延迟，突发流量如何处理？
+- 同步 API 什么时候应该改成异步任务？
+- 如何防止单个 tenant 消耗全部 AI 配额？
+
+## 第六轮：发布治理与回滚
+
+### 问题
+
+请说明如何用 GitOps 管理 dev、staging、production 发布，并支持快速回滚和审计。
+
+### 参考答案要点
+
+- Git 是 desired state 的单一真实来源。
+- development 可以自动部署 main 或最新镜像。
+- staging 使用 RC tag 验证候选版本。
+- production 使用正式 release tag，并需要人工 approval。
+- 每次生产发布应能追踪到 release、commit、image tag、配置 diff、审批记录。
+- 使用 ArgoCD 管理同步和 drift detection。
+- production 私有 AKS 不应依赖个人电脑直接 `kubectl apply`。
+- 回滚可以通过切回上一个 release tag 或 Blue/Green 切流完成。
+- 数据库 migration 必须考虑 backward compatibility。
+
+### 追问
+
+- 如何避免某个服务偷偷改 production 配置？
+- release 应该锁定服务组版本还是单服务版本？
+- 生产 hotfix 如何走流程？
+- Blue/Green 切换失败如何回滚？
+- ArgoCD 自动同步和手动同步分别适合哪些环境？
+
+## 第七轮：可观测性与 SLO
+
+### 问题
+
+如果你要为该平台设计可观测性体系，你会采集哪些指标、日志和 trace？如何定义告警？
+
+### 参考答案要点
+
+#### Metrics
+
+- API latency：p50/p95/p99。
+- error rate：HTTP 5xx/4xx、业务错误码。
+- throughput：RPS、upload count、AI task count。
+- Kubernetes：pod restart、OOMKilled、CPU/memory、HPA 状态。
+- JVM：heap、GC pause、thread count、class loading。
+- Queue：depth、lag、processing time、dead letter。
+- Database：connection usage、slow query、lock、replication lag。
+- AI provider：latency、error rate、token usage、cost。
+
+#### Logs
+
+- 结构化日志。
+- request id / trace id。
+- tenant id。
+- user id。
+- service name。
+- error category。
+- deployment version。
+
+#### Traces
+
+- 从 Gateway 到 backend services 的分布式 trace。
+- AI provider 调用应作为 external span。
+- 文件处理 pipeline 应记录每个阶段耗时。
+
+#### Alerts
+
+告警应该围绕用户影响和 SLO，而不是只看 Pod 是否 Running：
+
+- upload success rate 下降。
+- p99 latency 超过阈值。
+- 5xx error rate 升高。
+- OOMKilled 或 pod restart 突增。
+- HPA 持续达到 max replicas。
+- queue lag 持续增长。
+- AI provider error rate 升高。
+- ArgoCD sync failed / health degraded。
+
+### 追问
+
+- 如果只有 metrics-server，没有历史指标，会有什么问题？
+- 告警太多导致疲劳，如何分级？
+- SLO、SLI、SLA 的区别是什么？
+- 事故复盘应该包含哪些内容？
+
+## 第八轮：成本控制
+
+### 问题
+
+创业公司预算有限，如何在保证企业级生产能力的同时控制成本？
+
+### 参考答案要点
+
+- dev/test/staging 不需要和 production 一样的副本数。
+- 非生产环境可以 min=1/max=1 或定时缩容。
+- production 关键服务保留足够 HA 副本。
+- 对 AI 调用做 tenant quota、budget alert、provider routing。
+- 对文件存储设置 lifecycle policy。
+- HPA/KEDA 根据真实 workload 扩缩容。
+- request 设置太高会浪费节点资源，太低会导致调度和稳定性问题。
+- 对大任务 worker 使用独立 node pool，必要时 spot/preemptible 处理低优先级任务。
+
+### 追问
+
+- 哪些服务可以 scale to zero，哪些不可以？
+- request/limit 如何影响成本？
+- AI 成本如何按 tenant 归因？
+- 如何在压测结果基础上做容量规划？
+
+## 评分标准
+
+总分 100 分：
+
+- 安全架构：20 分
+  - Identity、RBAC、Workload Identity、Key Vault、NetworkPolicy、供应链安全。
+- 稳定性与高可用：20 分
+  - probes、HPA、resource、circuit breaker、Blue/Green、rollback、incident response。
+- 可扩展性：20 分
+  - Kustomize overlay、ArgoCD ApplicationSet、多 region、新服务 onboarding、queue/worker。
+- 高性能：15 分
+  - JVM tuning、streaming、异步化、缓存、DB pool、压测。
+- 可观测性：10 分
+  - metrics、logs、traces、SLO、alert、incident review。
+- 发布治理：10 分
+  - GitOps、release/RC、production approval、traceability、rollback。
+- 成本意识：5 分
+  - 环境差异化、资源配置、autoscaling、AI 成本控制。
+
+## 候选人能力分层
+
+### 初级/偏运维执行
+
+通常只会说：
+
+- 用 Kubernetes 部署。
+- 加 HPA。
+- 加监控。
+- 用 HTTPS。
+- Pod 挂了自动重启。
+
+风险是缺少系统性，不理解生产故障背后的机制。
+
+### 中级/平台工程师
+
+能说明：
+
+- Kustomize base/overlay。
+- ArgoCD GitOps。
+- Key Vault CSI。
+- NetworkPolicy。
+- HPA 和 resource requests/limits。
+- 基础发布流程和回滚。
+
+但可能对容量规划、依赖隔离、SLO、成本治理理解不深。
+
+### 高级/云服务架构师
+
+会主动提出：
+
+- HPA 不是稳定性的全部，scale-up 有延迟。
+- memory-bound/JVM OOM 不能只靠横向扩容解决。
+- livenessProbe 配错会导致故障放大。
+- readinessProbe 应保护流量入口，而不是掩盖服务问题。
+- NetworkPolicy 必须配套集成测试。
+- GitOps repo 是生产状态源，不能随意绕过。
+- 大文件和 AI 任务应异步化、pipeline 化、隔离资源池。
+- 需要 tenant quota、cost attribution 和 provider fallback。
+- release 应锁定一组服务版本，生产变更可审计可回滚。
+- 稳定性要用 SLO 表达，而不是只看 Pod Running。
+- 架构设计必须平衡安全、速度、成本、性能和团队复杂度。
+
+## 面试官使用建议
+
+建议面试按 60-90 分钟进行：
+
+1. 10 分钟：让候选人阅读背景并画整体架构。
+2. 15 分钟：讨论安全和权限。
+3. 20 分钟：基于 storage OOM 事故做 RCA。
+4. 15 分钟：讨论扩展性和性能。
+5. 10 分钟：讨论发布治理和回滚。
+6. 10 分钟：候选人反问和总结。
+
+面试官不要只看候选人是否说出某个工具名，而要看候选人是否能解释：
+
+- 为什么需要这个设计？
+- 它解决什么风险？
+- 它带来什么复杂度？
+- 如果失败，如何发现和恢复？
+- 未来规模扩大时如何演进？
+
+## 后续可沉淀方向
+
+可以继续扩展以下文档：
+
+- `cloud-service-architect-reference-answer_cn.md`：标准参考答案。
+- `cloud-service-architect-rubric_cn.md`：详细评分表。
+- `storage-oom-incident-interview_cn.md`：专门围绕 OOM 事故的面试材料。
+- `gitops-production-governance_cn.md`：GitOps 生产治理专题。
+- `saas-security-architecture_cn.md`：企业 SaaS 安全架构专题。
