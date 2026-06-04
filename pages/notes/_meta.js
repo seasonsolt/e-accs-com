@@ -3,5 +3,6 @@ export default {
   'learning-system': 'AI 学习系统',
   'mastering-python': '怎样才算精通 Python？',
   'prompt-engineering-framework': 'Prompt 工程框架',
-  'mcp-mental-model': 'MCP 心智模型'
+  'mcp-mental-model': 'MCP 心智模型',
+  'cloudflare-workers-containers-bindings': 'Cloudflare Workers/Containers'
 }

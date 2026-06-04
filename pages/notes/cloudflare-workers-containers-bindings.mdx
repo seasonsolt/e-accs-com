@@ -1,0 +1,532 @@
+---
+title: Cloudflare Workers、Containers 与 Binding 的工程心智模型
+---
+
+# Cloudflare Workers、Containers 与 Binding 的工程心智模型
+
+> 来源：一次关于 Cloudflare Containers、R2/D1/Vectorize 访问方式、Worker 与 Container 职责边界、Worker Binding 技术原理的讨论整理。  
+> 这篇笔记面向有传统前后端部署经验的工程师，重点不是罗列 API，而是建立正确的架构心智。
+
+## 一句话结论
+
+Cloudflare Workers + Containers 不是传统“前端 + 后端服务器”的简单替代品。
+
+更准确的心智是：
+
+```text
+Worker = Cloudflare 原生边缘入口 + 平台资源适配层 + 轻量业务逻辑层
+Container = Cloudflare 上运行 Docker 后端程序的复杂计算层
+Binding = Worker runtime 注入的受控资源句柄 / capability object
+```
+
+如果套到传统架构：
+
+```text
+传统：
+Browser / App
+  ↓
+Nginx / API Gateway / Load Balancer
+  ↓
+Backend Service
+  ↓
+Database / Object Storage / Queue / Vector DB
+
+Cloudflare：
+Browser / App
+  ↓
+Worker
+  ↓
+Container
+  ↓
+R2 / D1 / Vectorize / 外部 API
+```
+
+但这个类比不完全等价：Worker 比 Nginx 更强，因为它能直接执行业务逻辑、调用 Cloudflare 平台资源；Container 则补足 Worker 不适合跑重依赖和传统后端程序的问题。
+
+---
+
+## 1. Worker 是什么？
+
+Worker 是 Cloudflare 的轻量边缘 runtime。它运行在 Cloudflare 网络里，启动快、离用户近，并且可以直接访问 Cloudflare 平台能力。
+
+它适合做：
+
+- HTTP 入口
+- 鉴权、限流、CORS
+- 请求路由和改写
+- 边缘缓存策略
+- 轻量 API
+- 调用 R2、D1、KV、Durable Objects、Vectorize、Workers AI
+- Webhook 接收
+- 把请求分发给 Container 或其他 Worker
+
+所以 Worker 不只是“前端部署”。它更像：
+
+```text
+Nginx / API Gateway
++ Serverless Function
++ Cloudflare 平台 SDK 宿主
+```
+
+---
+
+## 2. Container 是什么？
+
+Cloudflare Container 是可以运行 Docker 镜像的后端执行环境。
+
+它适合做 Worker 不适合做的事情：
+
+- Python / Java / Go / Node 后端服务
+- FastAPI、Spring Boot、Django、Express 等传统服务
+- PDF/Office 文档解析
+- OCR、ffmpeg、Chromium、native binary
+- LlamaIndex / LangChain / reranker / RAG pipeline
+- 长任务、批处理、文件转换
+- 复杂依赖和系统包
+- 老项目迁移
+
+可以把 Container 理解成：
+
+```text
+Cloudflare 托管的 Docker 后端计算层
+```
+
+但是在 Cloudflare 的推荐心智里，Container 通常藏在 Worker 后面：
+
+```text
+Client → Worker → Container
+```
+
+Worker 负责入口、安全、路由和平台资源访问；Container 负责复杂执行。
+
+---
+
+## 3. 为什么不能只用传统“前端 + 后端”模型理解？
+
+传统模型通常是：
+
+```text
+前端：Vercel / Netlify / Nginx / CDN
+后端：Spring Boot / FastAPI / Express
+数据库：Postgres / Redis / S3 / Qdrant
+```
+
+Cloudflare 平台的模型更像：
+
+```text
+Worker 是入口和平台胶水层
+Container 是复杂后端执行层
+Cloudflare 产品是内置基础设施
+```
+
+很多后端逻辑可以直接放在 Worker 里：
+
+- 查 D1
+- 读写 R2
+- 查 Vectorize
+- 调 Workers AI
+- 做轻量鉴权和路由
+
+只有当逻辑开始变重，Worker runtime 不适合时，才需要 Container。
+
+---
+
+## 4. 一个实用的职责划分
+
+### 放 Worker 的逻辑
+
+- 路由
+- 鉴权
+- 限流
+- CORS
+- Cookie / session 处理
+- 用户权限判断
+- 简单 CRUD
+- 调用 R2 / D1 / KV / Vectorize binding
+- 缓存策略
+- Webhook
+- 请求分流
+- 把请求转发给 Container
+- 返回 streaming response
+
+### 放 Container 的逻辑
+
+- 重依赖业务逻辑
+- Python/Java/Go 后端
+- LlamaIndex / RAG pipeline
+- PDF / Office 文档解析
+- OCR
+- rerank
+- batch ingestion
+- legacy service
+- native binary
+- 长任务 worker
+- 多文件处理
+
+决策规则很简单：
+
+```text
+能在 Worker 里简单、快速、低依赖地完成 → 放 Worker
+需要完整 Linux、重依赖、传统服务、长任务 → 放 Container
+```
+
+---
+
+## 5. Binding 是什么？
+
+Worker Binding 是 Cloudflare 在 Worker runtime 中注入的资源能力对象。
+
+例如 Worker 里可以这样写：
+
+```ts
+export default {
+  async fetch(request, env) {
+    const obj = await env.BUCKET.get("a.txt")
+    const row = await env.DB.prepare("SELECT * FROM users").first()
+    const results = await env.VECTORIZE.query(vector)
+
+    return Response.json({ ok: true })
+  }
+}
+```
+
+这里的：
+
+```ts
+env.BUCKET
+env.DB
+env.VECTORIZE
+```
+
+就是 bindings。
+
+它们不是普通环境变量，也不是字符串形式的 secret，而是 Cloudflare runtime 给 Worker 注入的资源句柄。
+
+---
+
+## 6. Binding 和传统 secret / connection string 有什么不同？
+
+传统后端访问资源通常是：
+
+```text
+应用进程
+  ↓
+读取环境变量
+  ↓
+拿到 URL / 用户名 / 密码 / API token
+  ↓
+通过网络协议访问外部服务
+```
+
+例如：
+
+```env
+DATABASE_URL=postgres://user:***@host:5432/db
+S3_ACCESS_KEY=xxx
+S3_SECRET_KEY=***
+```
+
+Worker Binding 的模型不同。
+
+你在 `wrangler.toml` 或 Cloudflare Dashboard 里声明：
+
+```toml
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "my-bucket"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "my-db"
+database_id = "..."
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "my-index"
+```
+
+部署后，Cloudflare 记录：
+
+```text
+这个 Worker 被授权访问这些资源
+```
+
+运行时，Cloudflare 把资源对象注入到 `env`。
+
+所以心智模型是：
+
+```text
+传统后端：代码 + secret → 访问资源
+Worker binding：部署配置授权 → runtime 注入资源句柄 → 代码调用资源对象
+```
+
+---
+
+## 7. Binding 的技术本质：capability object
+
+从技术原理上，Binding 很像 capability-based security。
+
+也就是：
+
+```text
+谁拥有这个对象，谁就拥有对某个资源的特定操作能力。
+```
+
+例如：
+
+```ts
+await env.BUCKET.get("foo.txt")
+```
+
+这个对象代表：
+
+```text
+当前 Worker 被授权访问某个 R2 bucket
+```
+
+而不是：
+
+```text
+当前 Worker 知道某个 R2 bucket 的公网地址和密钥
+```
+
+可以类比操作系统里的文件描述符：
+
+```c
+int fd = open("/tmp/a.txt", O_RDONLY);
+read(fd, buf, n);
+```
+
+程序拿到的不是磁盘控制器密码，而是一个被内核授权过的 `fd`。
+
+Worker Binding 类似：
+
+```text
+Cloudflare runtime 给你的资源 fd
+```
+
+---
+
+## 8. Binding 调用背后发生了什么？
+
+概念流程是：
+
+```text
+1. 在配置里声明 bindings
+2. 部署时 Cloudflare 记录 Worker 与资源的授权关系
+3. 请求进入 Worker
+4. Worker runtime 构造 env 参数
+5. env 里包含资源对象
+6. 代码调用 env.DB / env.BUCKET / env.VECTORIZE
+7. runtime 把调用转成 Cloudflare 内部服务调用
+```
+
+所以它看起来像本地对象调用，但本质上是：
+
+```text
+Worker isolate → Cloudflare runtime host → Cloudflare internal service
+```
+
+D1、R2、Vectorize 仍然是分布式平台服务，不是本地内存对象。Binding 的优势是：
+
+- 不需要自己管理长期 token
+- 权限由部署配置决定
+- Worker 只能访问被绑定的资源
+- Cloudflare 可以走内部通道优化性能
+- 本地开发和类型系统也更容易支持
+
+---
+
+## 9. Container 可以直接使用 Binding 吗？
+
+通常不能。
+
+Worker 是 Cloudflare 自己的 JS/WASM isolate runtime，Cloudflare 可以控制它的执行环境，给它注入 `env` 对象。
+
+Container 里运行的是普通 Linux 进程：
+
+```text
+python app.py
+java -jar app.jar
+node server.js
+./my_binary
+```
+
+Cloudflare 不能以完全相同的方式给任意语言进程注入：
+
+```ts
+env.DB.prepare(...)
+env.BUCKET.get(...)
+env.VECTORIZE.query(...)
+```
+
+所以区别是：
+
+```text
+Worker:
+  runtime 原生支持 binding 对象
+
+Container:
+  普通进程，需要通过 HTTP/API/Worker proxy 访问资源
+```
+
+---
+
+## 10. Container 如何访问 R2、D1、Vectorize？
+
+### R2
+
+R2 有两种常见方式。
+
+第一种：通过 Worker binding 代理。
+
+```text
+Container → Worker internal handler → env.BUCKET → R2
+```
+
+第二种：Container 直接使用 R2 的 S3-compatible API。
+
+```text
+Container → R2 S3 endpoint → R2
+```
+
+如果你迁移传统后端或已有 S3 SDK，第二种很自然。
+
+### D1
+
+D1 更推荐通过 Worker binding 代理：
+
+```text
+Container → Worker internal API → env.DB.prepare(...) → D1
+```
+
+直接用 Cloudflare REST API 也可以，但应用运行时需要管理 API token 和权限边界，通常不如 Worker 代理干净。
+
+### Vectorize
+
+Vectorize 可以通过：
+
+```text
+Container → Worker internal API → env.VECTORIZE.query(...)
+```
+
+也可以直接调 Cloudflare REST API。
+
+如果 RAG pipeline 主要在 Container 里，直接 REST API 可能方便；如果 Worker 已经是入口和鉴权层，用 Worker binding 代理通常更安全、统一。
+
+---
+
+## 11. RAG 系统里的推荐拆法
+
+假设要做企业知识库 RAG，可以这样拆：
+
+```text
+Client
+  ↓
+Worker
+  - 鉴权
+  - 限流
+  - 用户身份解析
+  - 权限过滤
+  - 访问 D1 / R2 / Vectorize binding
+  ↓
+Container
+  - Python RAG pipeline
+  - LlamaIndex / LangChain
+  - query rewrite
+  - rerank
+  - 文档解析
+  - prompt 组装
+  ↓
+Worker / 外部 LLM / Workers AI
+  ↓
+返回答案
+```
+
+文档 ingestion 可以是：
+
+```text
+用户上传文档
+  ↓
+Worker
+  ↓
+R2 保存原文
+  ↓
+Queue 发任务
+  ↓
+Container 消费任务
+  ↓
+解析 / chunk / embedding
+  ↓
+写入 Vectorize / D1
+```
+
+这个拆法的核心是：
+
+```text
+Worker 负责 Cloudflare 平台能力和请求边界
+Container 负责复杂计算和重依赖执行
+```
+
+---
+
+## 12. 常见误解
+
+### 误解一：Worker 就是前端
+
+不对。Worker 可以是完整 API 层，也可以直接访问数据库、对象存储、向量索引和 AI 模型。
+
+### 误解二：Container 就是唯一后端
+
+也不对。很多后端逻辑直接放 Worker 更简单。Container 是在 Worker 不适合时才引入的复杂执行层。
+
+### 误解三：Binding 是环境变量
+
+不准确。普通环境变量是字符串配置；Binding 是 runtime 注入的资源能力对象。
+
+### 误解四：Container 能像 Worker 一样直接写 `env.DB`
+
+通常不能。Container 是普通 Linux 进程，不是 Worker runtime。
+
+### 误解五：用了 Container 就不需要 Worker
+
+在 Cloudflare 架构里，Worker 仍然很重要。它是入口、鉴权、路由和平台资源访问层。
+
+---
+
+## 13. 最终心智模型
+
+可以把 Worker + Container + Binding 理解成：
+
+```text
+Worker:
+  Cloudflare 原生的边缘 API 层。
+  负责入口、鉴权、路由、轻逻辑、平台资源访问。
+
+Container:
+  Cloudflare 上的 Docker 后端运行层。
+  负责传统服务、复杂依赖、长任务、重计算。
+
+Binding:
+  Worker runtime 注入的受控资源句柄。
+  不是 secret，而是 capability object。
+```
+
+最实用的一句话：
+
+```text
+轻逻辑、路由、鉴权、bindings 放 Worker；
+重逻辑、传统服务、复杂依赖、长任务放 Container。
+```
+
+如果用餐厅比喻：
+
+```text
+用户 = 客人
+Worker = 前台 / 服务员 / 收银 / 菜单系统
+Container = 厨房
+R2 / D1 / Vectorize = 仓库 / 账本 / 菜谱索引
+Binding = 前台被授权使用这些内部资源的门禁卡
+```
+
+用户一般不直接冲进厨房点菜，也不直接拿仓库钥匙。Worker 负责接待、授权和协调，Container 负责把复杂事情做完。
