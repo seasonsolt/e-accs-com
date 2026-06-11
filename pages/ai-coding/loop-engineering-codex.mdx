@@ -1,0 +1,843 @@
+---
+title: Loop Engineering：把 Codex 变成工程闭环
+---
+
+# Loop Engineering：把 Codex 变成工程闭环
+
+> Loop Engineering 不是“更会写 prompt”，而是把自己从“每轮提示模型的人”，升级成“设计反馈闭环、验证条件、状态系统和多 agent 流水线的人”。
+
+一句话概括：
+
+```text
+Codex Loop =
+  clear goal
++ constrained context
++ isolated worktree
++ project skill
++ real tools
++ deterministic eval
++ verifier agent
++ persistent state
++ human judgment
+```
+
+## 1. 从 Prompt 到 Loop 的范式变化
+
+过去使用 AI 编程，大多是人类在 inner loop：
+
+1. 写 prompt。
+2. 等模型输出。
+3. 看结果。
+4. 补充 context。
+5. 再 prompt。
+6. 手动运行测试。
+7. 继续修。
+
+这叫 **human-driven iteration**。
+
+Loop Engineering 的变化是：人类不再每一步都手动推动，而是设计一个能自己循环的工程系统：
+
+1. 写清楚目标和完成条件。
+2. 准备 repo、测试、lint、CI、fixtures。
+3. 把项目规则写进 `AGENTS.md` 或 skills。
+4. 让 Codex 自己读、改、跑、修。
+5. 用 verifier、eval、CI 判断是否完成。
+6. 把结果写回 state。
+7. 下一轮自动继续。
+
+这叫 **system-driven iteration**。
+
+人的工作从：
+
+> 我下一句该怎么提示模型？
+
+变成：
+
+> 我怎样设计一个系统，让模型在正确环境里反复尝试，并被可靠反馈约束？
+
+## 2. 四个层次：Prompt / Context / Harness / Loop
+
+### Prompt Engineering
+
+核心问题：
+
+> 这一轮我要怎么说，模型才给我好答案？
+
+它依赖人的临场表达，适合短任务，但不适合长周期工程。
+
+### Context Engineering
+
+核心问题：
+
+> 模型这次推理时应该看到什么？
+
+上下文窗口是工作记忆，不是数据库。不要把所有东西都塞进 prompt。长期状态应该外部化到 repo 文件、issue、Linear、trace、eval report 或数据库里。
+
+### Harness Engineering
+
+核心问题：
+
+> 单个 agent 运行时的环境、工具、权限、反馈怎么设计？
+
+包括：
+
+- shell / file access
+- sandbox
+- approvals
+- tool schema
+- context assembly
+- diff display
+- test runner
+- retry policy
+- logs / trace
+- stop condition
+
+### Loop Engineering
+
+核心问题：
+
+> 多轮、多 agent、跨时间的工作系统怎么设计？
+
+包括：
+
+- 周期性触发
+- discovery
+- triage
+- isolated execution
+- verification
+- persistent state
+- routing
+- human review
+- next action selection
+
+所以层级关系是：
+
+```text
+Prompt：一轮怎么说
+Context：这一轮看什么
+Harness：一个 agent 怎么跑
+Loop：一组 agent / automation / state / eval 怎么持续工作
+```
+
+## 3. Loop Engineering 的来源脉络
+
+### OpenAI / Codex 方向
+
+OpenAI 关于 Codex 的公开材料把核心放在 **agent loop** 与 **harness engineering** 上：
+
+- 用户请求
+- 构造上下文
+- 模型推理
+- 调用工具
+- 观察结果
+- 更新计划
+- 继续或结束
+
+在 agent-first 的软件工程里，团队的主要工作逐渐从“手写所有代码”转向：
+
+- 设计环境
+- 指定意图
+- 建立反馈回路
+- 让 Codex agents 能可靠工作
+
+也就是说，Codex 不只是一个代码生成器，而是一个可被 harness 和 loop 驱动的执行器。
+
+### Anthropic / Claude 方向
+
+Anthropic 对 agent 的定义很清晰：
+
+> Agents are LLMs autonomously using tools in a loop.
+
+也就是：agent 是一个在环境反馈中自主使用工具的 LLM。
+
+Anthropic 的工程文章反复强调：
+
+- 多数场景先用简单 workflow，不要一上来就复杂 agent。
+- 真正的 agent 适合不确定路径里的探索、调用工具、观察结果、调整动作。
+- 上下文是有限资源，context engineering 是核心。
+- 工具设计决定 agent 能力边界。
+- eval 不是最后打分，而是整个 agent 生命周期的反馈系统。
+- 多 agent 适合 open-ended research / parallel exploration，但会增加协调成本。
+- harness 会随着模型能力变化而过时，所以 session、harness、sandbox 等接口要解耦。
+
+### 社区总结：Addy Osmani 的 Loop Engineering
+
+Addy Osmani 对 Loop Engineering 的定义很直接：
+
+> Loop engineering is replacing yourself as the person who prompts the agent. You design the system that does it instead.
+
+一个 loop 需要五个部件，加一个记忆层：
+
+1. **Automations**：定期发现和分诊任务。
+2. **Worktrees**：隔离并行 agent，避免文件冲突。
+3. **Skills**：把项目知识写成 agent 可复用的知识。
+4. **Plugins / connectors**：连接 issue tracker、DB、Slack、CI、staging 等真实工具。
+5. **Sub-agents**：把实现者和验证者分开。
+6. **State / memory**：用 markdown、Linear、issue、`AGENTS.md`、progress file 等承载跨轮状态。
+
+他也提醒：loop 不会让工程师不需要理解代码。相反，它会更快放大 comprehension debt。自动化 verification 不等于真实证明。最危险的是 cognitive surrender：人类放弃判断，只按 “go”。
+
+## 4. 关于 LLM 的第一性原理
+
+### 原理一：LLM 不是“知道”，而是在上下文中预测下一步
+
+LLM 的底层机制仍是 next-token prediction。它没有稳定的内在项目状态。所谓“会做事”，来自：
+
+- 上下文里有目标；
+- 工具给它行动能力；
+- 工具结果作为 observation 反馈；
+- 下一轮推理看到反馈后调整行为。
+
+所以 agent loop 的本质是：
+
+> 把静态语言模型变成环境里的闭环控制系统。
+
+可以类比控制论：
+
+- prompt / instruction：目标设定
+- model：控制器
+- tool call：动作
+- tool result：传感器反馈
+- eval：误差测量
+- loop：迭代控制
+- memory：外部状态
+
+### 原理二：上下文窗口是工作记忆，不是数据库
+
+Context 是有限资源，有 attention budget。长上下文不是免费的，可能降低检索和长程推理精度。
+
+所以：
+
+- 不要让 agent 每次从零读完整代码库。
+- 不要把长期状态寄存在对话历史里。
+- 不要把所有日志直接塞进 prompt。
+- 应该把状态外部化到 repo、issue、Linear、数据库、trace 或 eval report。
+
+一句话：
+
+> 模型会忘，仓库不会忘。
+
+### 原理三：工具定义了 agent 的可行动边界
+
+LLM 自己不能改代码、跑测试、查 DB、开 PR。它必须通过工具作用于环境。
+
+所以工具设计比 prompt 更接近“能力工程”：
+
+- 工具粒度是否合适？
+- 返回结果是否太长？
+- 错误信息是否可修复？
+- 是否有 dry-run？
+- 是否有权限边界？
+- 是否可审计？
+- 是否能稳定重复？
+
+Agent 只和你给它的工具一样强。
+
+### 原理四：模型不适合单独验证自己
+
+模型容易：
+
+- 过早认为完成；
+- 对自己代码宽容；
+- 编造测试通过；
+- 忽略边界 case；
+- 在长任务里 drift。
+
+所以 loop 必须有外部反馈：
+
+- deterministic tests
+- lint
+- typecheck
+- benchmark
+- golden files
+- integration tests
+- database state check
+- screenshot diff
+- second-agent review
+- human review
+
+关键原则：
+
+> 不要问 agent “你做好了吗？” 要让环境证明它做好了。
+
+### 原理五：长任务需要拆分、隔离、压缩和恢复
+
+长任务失败通常不是因为模型完全不会，而是因为：
+
+- 上下文爆炸；
+- 状态丢失；
+- 多 agent 文件冲突；
+- 任务边界不清；
+- stop condition 不明确；
+- verification 不可信；
+- 人类 review 带宽不足。
+
+Loop Engineering 要解决的是这些系统问题。
+
+## 5. 一个好的工程 loop 长什么样？
+
+一个成熟 loop 大概包含八步。
+
+### 1. Discovery
+
+每天扫描 CI failure、open issues、recent commits、用户反馈，产出候选任务。
+
+### 2. Triage
+
+判断任务是否值得 agent 做，分类为 bugfix、refactor、test debt、docs、security、performance。
+
+### 3. Planning
+
+生成小规格说明：
+
+- 背景
+- 目标
+- 非目标
+- 涉及文件
+- 验证方式
+- 风险点
+
+### 4. Execution
+
+在独立 worktree 里让 Codex 修改，不和主工作区互相污染。
+
+### 5. Verification
+
+跑测试、lint、typecheck。必要时启动 verifier subagent。不通过就回到 execution。
+
+### 6. Review
+
+人看 diff、测试输出、设计解释。不是逐行亲手写，而是确认行为正确。
+
+### 7. State update
+
+把尝试过什么、结果如何、遗留问题写入 markdown、issue 或 Linear。
+
+### 8. Next loop
+
+下一次 automation 读取 state，继续推进或归档。
+
+## 6. 用 Codex 落地 Loop Engineering
+
+目标不是“让 Codex 帮你写一次代码”，而是搭一个能反复产出的工程 loop。
+
+### Phase 0：先把 repo 变成 agent-friendly
+
+在项目根目录准备：
+
+```text
+AGENTS.md
+docs/
+  architecture.md
+  development.md
+  testing.md
+  decisions.md
+.loop/
+  state.md
+  triage.md
+  evals.md
+  prompts/
+    daily-triage.md
+    fix-ci.md
+    bug-hunt.md
+    review.md
+```
+
+`AGENTS.md` 建议包括：
+
+```md
+# Project Agent Guide
+
+## Mission
+这个项目解决什么问题，核心用户是谁。
+
+## Architecture
+主要模块、数据流、关键依赖。
+
+## Local Commands
+- Build:
+- Test:
+- Lint:
+- Typecheck:
+- Run dev server:
+
+## Coding Conventions
+命名、错误处理、日志、事务、并发、安全约束。
+
+## Do Not
+- 不要改数据库 schema，除非任务明确要求。
+- 不要绕过测试。
+- 不要引入大型依赖。
+- 不要修改 public API，除非更新兼容层。
+
+## Verification
+任何改动完成前必须运行：
+- test
+- lint
+- typecheck
+
+## Common Failure Modes
+历史上踩过的坑。
+
+## Review Checklist
+提交前必须说明：
+- 改了什么
+- 为什么这样改
+- 如何验证
+- 风险是什么
+```
+
+核心思想：把你每次都要口头解释给 agent 的东西，变成 repo 里的长期制度。
+
+### Phase 1：建立最小 Codex loop
+
+先不要搞复杂 automation。先做一个人工触发的 loop。
+
+差的任务：
+
+```text
+帮我修一下登录问题。
+```
+
+好的任务：
+
+```text
+目标：修复登录接口在 token 过期时返回 500 的问题。
+
+背景：
+- 预期行为：token 过期返回 401。
+- 当前行为：某些情况下抛异常，最终返回 500。
+- 相关模块可能在 auth/session/token validation。
+
+约束：
+- 不要改变登录成功路径。
+- 不要修改数据库 schema。
+- 不要引入新依赖。
+
+验证：
+- 添加或更新测试覆盖 token expired case。
+- 运行 auth 相关测试。
+- 运行 lint/typecheck。
+
+完成标准：
+- 相关测试通过。
+- token expired 返回 401。
+- diff 中没有无关格式化。
+- 最后总结修改、验证命令和风险。
+```
+
+### Phase 2：把 done condition 写死
+
+Loop Engineering 最大的分水岭是：有没有可验证的完成条件。
+
+坏的 done condition：
+
+```text
+把代码优化一下。
+```
+
+好的 done condition：
+
+```text
+完成条件：
+1. `make test-auth` 通过。
+2. `make lint` 通过。
+3. 新增测试覆盖 expired token。
+4. API 返回码从 500 变为 401。
+5. 没有 unrelated diff。
+```
+
+思维方式要变成：
+
+> 我不是让 Codex 写代码；我是给它一个可机器验证的收敛条件。
+
+### Phase 3：使用 worktree 隔离并行任务
+
+一旦并行跑多个 Codex，就应该用 worktree。
+
+```bash
+git worktree add ../project-loop-auth -b codex/auth-expired-token
+git worktree add ../project-loop-ci -b codex/fix-ci-failure
+git worktree add ../project-loop-docs -b codex/update-docs
+```
+
+好处：
+
+- 不互相覆盖文件。
+- 每个任务有独立 branch。
+- review 更清晰。
+- 失败可以直接删 worktree。
+- 人类可以并行比较多个方案。
+
+清理：
+
+```bash
+git worktree remove ../project-loop-auth
+git branch -D codex/auth-expired-token
+```
+
+### Phase 4：建立 `.loop/state.md`
+
+这是 loop 的脊椎。
+
+```md
+# Loop State
+
+## Active Tasks
+
+### auth-expired-token
+- Status: in_progress
+- Branch: codex/auth-expired-token
+- Owner: codex
+- Goal: expired token returns 401 instead of 500
+- Verification:
+  - make test-auth
+  - make lint
+- Last Result:
+  - 2026-06-10: tests failing in TokenValidatorTest
+- Next:
+  - inspect token expiry exception mapping
+
+## Completed Tasks
+
+### docs-dev-setup
+- Merged:
+- Verification:
+- Notes:
+
+## Blocked
+
+### flaky-payment-test
+- Blocker: requires staging credentials
+- Human action needed:
+```
+
+重点：不要让状态只存在 Codex 对话里。状态要存在 repo 里，让下一轮 agent 能接上。
+
+### Phase 5：给 Codex 建 skills
+
+如果 Codex 支持 Agent Skills / `SKILL.md`，建议至少建这些：
+
+```text
+.codex/skills/
+  test-debugging/
+    SKILL.md
+  api-change/
+    SKILL.md
+  frontend-fix/
+    SKILL.md
+  refactor-safe/
+    SKILL.md
+  ci-triage/
+    SKILL.md
+  security-review/
+    SKILL.md
+```
+
+`test-debugging/SKILL.md` 示例：
+
+```md
+---
+name: test-debugging
+description: Debug failing tests with minimal, verified changes.
+---
+
+# Test Debugging Skill
+
+## Process
+
+1. Reproduce the failure with the narrowest test command.
+2. Read the failure output carefully.
+3. Identify whether the failure is:
+   - product bug
+   - stale test
+   - environment issue
+   - race / flake
+4. Make the smallest code change.
+5. Re-run the narrow test.
+6. Re-run the relevant broader suite.
+7. Summarize:
+   - root cause
+   - changed files
+   - verification commands
+   - remaining risks
+
+## Constraints
+
+- Do not delete tests to make the suite pass.
+- Do not weaken assertions unless there is a clear product behavior change.
+- Do not introduce sleeps for race conditions unless justified.
+- Prefer deterministic fixes.
+
+## Done
+
+- Narrow test passes.
+- Related suite passes.
+- No unrelated diff.
+```
+
+这类 skill 的价值是把你的工程品味固化给 loop。
+
+### Phase 6：Maker / Checker 分离
+
+不要让同一个 Codex 既写代码又宣布“我做完了”。
+
+Maker：
+
+```text
+你是 implementation agent。
+根据 spec 修改代码。
+不要做最终验收。
+完成后输出：
+- changed files
+- intended behavior
+- commands run
+- known risks
+```
+
+Checker：
+
+```text
+你是 verification agent。
+不要假设 maker 是对的。
+请审查 diff、运行测试，并根据 spec 判断是否真的完成。
+
+重点检查：
+- 是否满足 done condition
+- 是否有无关改动
+- 是否破坏兼容性
+- 是否缺测试
+- 是否有安全/性能风险
+
+输出：
+- pass/fail
+- blocking issues
+- suggested fixes
+```
+
+这是 loop engineering 的核心原则之一：实现者和裁判必须分离。
+
+### Phase 7：把 CI 变成 loop 的硬反馈
+
+Codex 最适合处理有硬反馈的问题：
+
+- 测试失败
+- lint 失败
+- typecheck 失败
+- benchmark 回退
+- API contract 不匹配
+- snapshot diff
+- migration check 失败
+
+不适合只靠主观判断的问题：
+
+- “让代码更优雅”
+- “产品体验更好”
+- “架构更现代”
+- “帮我重构一下”
+
+除非先把它们转成可验证目标。
+
+例如：
+
+```text
+坏目标：
+重构用户模块。
+
+好目标：
+将 UserService 中的 token validation 逻辑抽到 TokenValidator。
+约束：
+- public API 不变。
+- 现有测试全部通过。
+- 新增 TokenValidator 单元测试。
+- UserService 文件减少至少 80 行。
+- 不引入新依赖。
+```
+
+### Phase 8：建立每日 triage automation
+
+如果用 Codex app 的 Automations，可以每天跑一个 triage prompt：
+
+```md
+你是项目 triage agent。
+
+每天执行：
+
+1. 阅读：
+   - .loop/state.md
+   - 最近 24 小时 git commit
+   - open issues / Linear tickets
+   - CI failure summary
+   - TODO/FIXME 新增项
+
+2. 产出 .loop/triage.md：
+   - 新发现的问题
+   - 可以交给 Codex 的小任务
+   - 需要人类判断的任务
+   - 被阻塞任务
+   - 推荐今天优先做的 1-3 个任务
+
+3. 不要修改业务代码。
+4. 不要开 PR。
+5. 只做 discovery 和 triage。
+```
+
+这一步的本质是：让 loop 自己发现工作，而不是等你想起来。
+
+### Phase 9：建立 fix-CI loop
+
+这是最容易落地、收益最高的 loop。
+
+```md
+你是 CI repair agent。
+
+目标：
+修复当前分支上的 CI failure。
+
+步骤：
+1. 读取最新 CI 日志。
+2. 找到第一个真实失败，不要被后续 cascade failure 干扰。
+3. 本地复现最小失败。
+4. 修复。
+5. 运行最小测试。
+6. 运行相关测试。
+7. 更新 .loop/state.md。
+
+约束：
+- 不要删除测试。
+- 不要降低 lint/typecheck 规则。
+- 不要跳过 CI。
+- 不要做无关重构。
+
+完成条件：
+- 失败的 CI check 本地可复现并通过。
+- 相关测试通过。
+- 输出 root cause 和 verification commands。
+```
+
+这个 loop 价值很高，因为 feedback 是硬的。
+
+## 7. 推荐目录结构
+
+```text
+repo/
+  AGENTS.md
+
+  .loop/
+    state.md
+    triage.md
+    evals.md
+    decisions.md
+    runs/
+      2026-06-10-ci-fix.md
+      2026-06-10-auth-bug.md
+    prompts/
+      daily-triage.md
+      fix-ci.md
+      implement-task.md
+      verify-task.md
+      bug-hunt.md
+
+  .codex/
+    agents/
+      implementer.toml
+      verifier.toml
+      security-reviewer.toml
+      test-debugger.toml
+    skills/
+      test-debugging/
+        SKILL.md
+      safe-refactor/
+        SKILL.md
+      ci-triage/
+        SKILL.md
+```
+
+## 8. 什么时候不要用 loop？
+
+不要把 loop 用在这些场景：
+
+1. **目标不可验证**
+   - “做得更好”
+   - “更高级”
+   - “更像大厂”
+
+2. **风险极高**
+   - 生产数据库迁移
+   - 支付逻辑
+   - 权限系统大改
+   - 安全边界变更
+
+3. **人类自己也没想清楚**
+   - loop 会放大模糊需求。
+
+4. **缺测试、缺日志、缺环境**
+   - 没反馈就没有 loop，只有 blind generation。
+
+5. **review 带宽不足**
+   - 并行 10 个 agent 没意义，最后都卡在人类 review。
+
+## 9. 七天最小落地路径
+
+### 第一天：写 `AGENTS.md`
+
+把项目命令、约束、测试方法、禁止事项写进去。
+
+### 第二天：建 `.loop/state.md`
+
+开始记录 agent 任务状态。
+
+### 第三天：用 Codex 跑一个 fix-CI loop
+
+只选择一个有明确失败日志的任务。
+
+### 第四天：加 verifier
+
+让第二个 Codex / subagent 只做 review。
+
+### 第五天：引入 worktree
+
+并行跑两个小任务。
+
+### 第六天：沉淀第一个 skill
+
+比如 `test-debugging`。
+
+### 第七天：做 daily triage automation
+
+让 Codex 每天扫描 CI / issues / commits，给你候选任务。
+
+## 10. 最终判断
+
+Loop Engineering 的本质是：
+
+> 把 LLM 从“聊天对象”变成“闭环工程系统里的一个可替换执行器”。
+
+它真正改变的是软件工程里的控制点：
+
+- 以前控制点在代码行。
+- 后来控制点在 prompt。
+- 再后来控制点在 context。
+- 现在控制点在 loop：环境、工具、状态、验证、子代理、自动化和人类 review。
+
+对于 Codex，最正确的使用方式不是“让它替我写代码”，而是：
+
+> 用 Codex 作为循环执行器；你负责定义目标、约束、验证和系统记忆。
+
+最后一句最重要：
+
+> Build the loop. Stay the engineer.
+
+搭建循环，但不要把判断权交出去。
+
+## 参考资料
+
+- OpenAI: [Unrolling the Codex agent loop](https://openai.com/index/unrolling-the-codex-agent-loop/)
+- OpenAI: [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/)
+- Anthropic: [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
+- Anthropic: [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+- Anthropic: [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+- Anthropic: [Writing effective tools for agents — with agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
+- Anthropic: [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)
+- Addy Osmani: [Loop Engineering](https://addyosmani.com/blog/loop-engineering/)
+- Simon Willison: [Agents](https://simonwillison.net/2025/Sep/18/agents/)
